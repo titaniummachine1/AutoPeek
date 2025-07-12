@@ -945,33 +945,45 @@ local function OnCreateMove(pCmd)
 	else
 		-- Manual mode (Peek Assist OFF) – return immediately when shooting
 		if Menu.PeekAssist == false and PosPlaced then
+			-- Use same shooting detection as peek assist mode
 			if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-				-- First tick: open cyoa and start returning
-				if not ShotThisTick then
-					client.Command("cyoa_pda_open 1", true)
-					ShotThisTick = true
-					NeedsCyoaClose = true
+				-- Trigger InstantStop on shoot tick (same as peek assist)
+				if currentState == STATE_DEFAULT and isGrounded then
+					triggerFastStop() -- cyoa open 1
 				end
 				IsReturning = true
-			end
-
-			-- Next tick: close cyoa to unfreeze and cancel scope
-			if NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-				client.Command("cyoa_pda_open 0", true)
-				NeedsCyoaClose = false
 			end
 
 			if IsReturning == true then
 				local distVector = PeekReturnVec - localPos
 				local dist = distVector:Length()
-				if dist < 12 then
+				if dist < 7 then
 					IsReturning = false
+					currentState = STATE_DEFAULT -- Reset InstantStop state
+					cooldownTicksRemaining = 0
 					if Menu.WarpBack and warp then warp.TriggerCharge() end
 					return
 				end
 
-				-- First set walking movement, then warp
+				-- Always set walking movement every tick during return
 				WalkTo(pCmd, pLocal, PeekReturnVec)
+
+				-- Process InstantStop state machine (same as peek assist)
+				if currentState == STATE_ENDING_FAST_STOP then
+					processEndingFastStopState() -- cyoa open 0 and enter cooldown
+				elseif currentState == STATE_COOLDOWN then
+					cooldownTicksRemaining = cooldownTicksRemaining - 1
+					if cooldownTicksRemaining <= 0 then
+						currentState = STATE_DEFAULT
+						cooldownTicksRemaining = 0
+					end
+				end
+
+				-- Next tick: close cyoa to unfreeze and cancel scope
+				if NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+					client.Command("cyoa_pda_open 0", true)
+					NeedsCyoaClose = false
+				end
 
 				-- Use warp back if enabled and moving towards return position
 				if Menu.WarpBack then
@@ -992,7 +1004,7 @@ local function OnCreateMove(pCmd)
 					if warp and not warp.IsWarping() and (warp.GetChargedTicks() or 0) > 0 and canWarp then
 						warp.TriggerWarp()
 					end
-					if speed <= 5 then
+					if speed <= 5 then -- fallback if stuck
 						pLocal:SetAbsOrigin(PeekReturnVec)
 					end
 				end
