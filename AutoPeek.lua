@@ -197,6 +197,228 @@ local PrevCanShoot = false -- track if weapon could shoot in previous tick
 local TargetCandidates = {}
 local CandidatesUpdateTick = -1
 
+-- Lightweight Profiler System -----------------------------------------------
+local PROFILER_MAX_TIME = 0.01  -- Dynamic scale based on frame budget
+local ProfilerActive = false
+local ProfilerFrameStartTimes = {} -- Track start times for current frame
+local ProfilerFrameAccumulator = {} -- Accumulate times for current frame
+local ProfilerDisplayData = {} -- Data to display (rolling average)
+
+-- Memory tracking system
+local ProfilerMemoryStart = 0 -- Memory at start of frame
+local ProfilerMemoryEnd = 0 -- Memory at end of frame
+local ProfilerMemoryDelta = 0 -- Memory change per frame
+local ProfilerMemoryAccumulator = 0 -- Accumulate memory changes
+local ProfilerMemoryDisplayData = 0 -- Rolling average memory usage
+
+-- Per-function memory tracking
+local ProfilerFunctionMemoryStart = {} -- Memory at start of each function
+local ProfilerFunctionMemoryAccumulator = {} -- Accumulate memory changes per function
+local ProfilerFunctionMemoryDisplayData = {} -- Rolling average memory usage per function
+
+-- Rolling window system for stable profiling over time
+local PROFILER_WINDOW_SIZE = 66 -- ~1 second at 66fps
+local ProfilerHistory = {} -- Circular buffer of recent frame data
+local ProfilerMemoryHistory = {} -- Circular buffer of memory data
+local ProfilerFunctionMemoryHistory = {} -- Circular buffer of per-function memory data
+local ProfilerHistoryIndex = 1 -- Current position in circular buffer
+local ProfilerHistoryCount = 0 -- How many frames we've accumulated
+
+-- Frame timing expectations
+local EXPECTED_FRAME_TIME = 1.0 / 66.67 -- Expected frame time at 66fps (~0.015 seconds)
+local EXPECTED_TICK_TIME = globals.TickInterval() or EXPECTED_FRAME_TIME
+
+-- Total program execution tracking
+local TotalProgramTime = 0
+
+-- Helper function to validate numeric values and prevent NaN
+local function ValidateNumber(value, fallback)
+	if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+		return fallback or 0
+	end
+	return value
+end
+
+-- Function definitions with colors and IDs
+local ProfilerFunctions = {
+    {id = 1, name = "UpdateTargetCandidates", color = {255, 100, 100}},
+    {id = 2, name = "SimulateMovement", color = {100, 255, 100}},
+    {id = 3, name = "CanAttackFromPos", color = {100, 100, 255}},
+    {id = 4, name = "GetFOV", color = {255, 255, 100}},
+    {id = 5, name = "VisPos", color = {255, 100, 255}},
+    {id = 6, name = "GetHitboxPos", color = {100, 255, 255}},
+    {id = 7, name = "BinarySearch", color = {255, 150, 50}},
+    {id = 8, name = "WalkTo", color = {150, 255, 50}},
+    {id = 9, name = "OnCreateMove_Total", color = {50, 255, 150}},
+    {id = 10, name = "OnDraw_Total", color = {150, 50, 255}},
+    {id = 11, name = "PeekLogic", color = {255, 200, 50}},
+    {id = 12, name = "ReturnLogic", color = {200, 255, 50}},
+    {id = 13, name = "DirectionUpdate", color = {50, 200, 255}},
+    {id = 14, name = "VisualDrawing", color = {255, 50, 200}},
+    {id = 15, name = "MenuDrawing", color = {200, 50, 255}},
+}
+
+-- Initialize accumulator and display data
+for i = 1, #ProfilerFunctions do
+    ProfilerFrameAccumulator[i] = 0
+    ProfilerDisplayData[i] = 0
+    ProfilerFunctionMemoryAccumulator[i] = 0
+    ProfilerFunctionMemoryDisplayData[i] = 0
+end
+
+-- Initialize rolling history buffer
+for frameIndex = 1, PROFILER_WINDOW_SIZE do
+    ProfilerHistory[frameIndex] = {}
+    ProfilerFunctionMemoryHistory[frameIndex] = {}
+    for funcIndex = 1, #ProfilerFunctions do
+        ProfilerHistory[frameIndex][funcIndex] = 0
+        ProfilerFunctionMemoryHistory[frameIndex][funcIndex] = 0
+    end
+    ProfilerMemoryHistory[frameIndex] = 0
+end
+
+-- Start frame memory tracking
+local function ProfilerStartFrame()
+    if ProfilerActive then
+        ProfilerMemoryStart = ValidateNumber(collectgarbage("count"), 0) -- Get current memory usage in KB
+    end
+end
+
+-- Calculate total program time and update scaling
+local function ProfilerCalculateTotalProgramTime()
+    TotalProgramTime = 0
+    for i = 1, #ProfilerFunctions do
+        TotalProgramTime = TotalProgramTime + ProfilerDisplayData[i]
+    end
+    
+    -- Debug total program timing verification
+    if ProfilerActive and TotalProgramTime > 0 then
+        if globals.TickCount() % 120 == 0 then -- Every 2 seconds
+            print("Total Program Time (sum of functions):", string.format("%.6f", TotalProgramTime), "seconds =", string.format("%.3f", TotalProgramTime * 1000), "ms")
+        end
+    end
+    
+    -- Dynamic profiler scale: use expected frame time as reference
+    -- This shows how much of the frame budget we're using
+    PROFILER_MAX_TIME = EXPECTED_FRAME_TIME
+end
+
+-- Profiler functions - always accumulate regardless of ProfilerActive state
+local function ProfilerStart(functionId)
+    ProfilerFrameStartTimes[functionId] = globals.RealTime()
+    if ProfilerActive then
+        ProfilerFunctionMemoryStart[functionId] = ValidateNumber(collectgarbage("count"), 0)
+    end
+end
+
+local function ProfilerEnd(functionId)
+    local startTime = ProfilerFrameStartTimes[functionId]
+    if startTime then
+        local duration = globals.RealTime() - startTime
+        ProfilerFrameAccumulator[functionId] = ProfilerFrameAccumulator[functionId] + duration
+        ProfilerFrameStartTimes[functionId] = nil
+        
+        -- Track memory usage per function
+        if ProfilerActive then
+            local memoryStart = ProfilerFunctionMemoryStart[functionId]
+            if memoryStart then
+                local memoryEnd = ValidateNumber(collectgarbage("count"), 0)
+                local memoryDelta = ValidateNumber(memoryEnd - memoryStart, 0)
+                ProfilerFunctionMemoryAccumulator[functionId] = ValidateNumber(ProfilerFunctionMemoryAccumulator[functionId] + math.abs(memoryDelta), 0)
+                ProfilerFunctionMemoryStart[functionId] = nil
+            end
+        end
+        
+        -- Debug timing verification (remove after testing)
+        if ProfilerActive and functionId == 9 and duration > 0 then -- OnCreateMove_Total
+            if globals.TickCount() % 120 == 0 then -- Every 2 seconds
+                print("Timing Debug - Function", functionId, "Duration:", string.format("%.6f", duration), "seconds =", string.format("%.3f", duration * 1000), "ms")
+            end
+        end
+    end
+end
+
+-- Called at end of frame to update display and clear accumulator
+local function ProfilerEndFrame()
+    -- End frame memory tracking
+    if ProfilerActive then
+        ProfilerMemoryEnd = ValidateNumber(collectgarbage("count"), 0)
+        ProfilerMemoryDelta = ValidateNumber(ProfilerMemoryEnd - ProfilerMemoryStart, 0)
+        ProfilerMemoryAccumulator = ValidateNumber(ProfilerMemoryAccumulator + math.abs(ProfilerMemoryDelta), 0) -- Track absolute memory change
+    end
+    
+    -- Store current frame data in circular buffer
+    for i = 1, #ProfilerFunctions do
+        ProfilerHistory[ProfilerHistoryIndex][i] = ProfilerFrameAccumulator[i]
+        ProfilerFrameAccumulator[i] = 0 -- Clear for next frame
+        
+        -- Store per-function memory data
+        ProfilerFunctionMemoryHistory[ProfilerHistoryIndex][i] = ProfilerFunctionMemoryAccumulator[i]
+        ProfilerFunctionMemoryAccumulator[i] = 0 -- Clear for next frame
+    end
+    
+    -- Store memory data
+    ProfilerMemoryHistory[ProfilerHistoryIndex] = ProfilerMemoryAccumulator
+    ProfilerMemoryAccumulator = 0 -- Clear for next frame
+    
+    -- Update circular buffer tracking
+    ProfilerHistoryIndex = ProfilerHistoryIndex + 1
+    if ProfilerHistoryIndex > PROFILER_WINDOW_SIZE then
+        ProfilerHistoryIndex = 1 -- Wrap around
+    end
+    if ProfilerHistoryCount < PROFILER_WINDOW_SIZE then
+        ProfilerHistoryCount = ProfilerHistoryCount + 1
+    end
+    
+    -- Calculate rolling average from history buffer
+    local hasData = false
+    for funcIndex = 1, #ProfilerFunctions do
+        local totalTime = 0
+        local totalMemory = 0
+        
+        for frameIndex = 1, ProfilerHistoryCount do
+            totalTime = totalTime + ValidateNumber(ProfilerHistory[frameIndex][funcIndex], 0)
+            totalMemory = totalMemory + ValidateNumber(ProfilerFunctionMemoryHistory[frameIndex][funcIndex], 0)
+        end
+        
+        -- Average time per frame over the rolling window
+        ProfilerDisplayData[funcIndex] = ValidateNumber(ProfilerHistoryCount > 0 and totalTime / ProfilerHistoryCount or 0, 0)
+        -- Average memory per frame over the rolling window
+        ProfilerFunctionMemoryDisplayData[funcIndex] = ValidateNumber(ProfilerHistoryCount > 0 and totalMemory / ProfilerHistoryCount or 0, 0)
+        
+        if ProfilerDisplayData[funcIndex] > 0 then
+            hasData = true
+        end
+    end
+    
+    -- Calculate rolling average total memory usage
+    local totalMemory = 0
+    for frameIndex = 1, ProfilerHistoryCount do
+        totalMemory = totalMemory + ValidateNumber(ProfilerMemoryHistory[frameIndex], 0)
+    end
+    ProfilerMemoryDisplayData = ValidateNumber(ProfilerHistoryCount > 0 and totalMemory / ProfilerHistoryCount or 0, 0)
+    
+    -- Calculate total program time and update scaling
+    ProfilerCalculateTotalProgramTime()
+    
+    -- Debug print every 60 frames if profiler is active and we have data
+    if ProfilerActive and hasData then
+        local frameCount = globals.TickCount()
+        if frameCount % 60 == 0 then
+            local totalFuncMemory = 0
+            for i = 1, #ProfilerFunctions do
+                totalFuncMemory = totalFuncMemory + ValidateNumber(ProfilerFunctionMemoryDisplayData[i], 0)
+            end
+            print("Profiler capturing data - Frame:", frameCount, "Window:", ProfilerHistoryCount, "frames, Total Program:", string.format("%.3fms", TotalProgramTime * 1000), "Function Memory:", string.format("%.1fKB", totalFuncMemory))
+        end
+    end
+    
+    -- Clear any remaining start times
+    ProfilerFrameStartTimes = {}
+end
+
+-- End of Profiler System -----------------------------------------------------
+
 -- Helper from InstantStop
 local function isPlayerGrounded(player)
 	if not player then return false end
@@ -363,18 +585,25 @@ end
 -- Improved simulation function with wall direction correction
 -- Returns the walkable distance actually simulated, final feet position, and path taken
 local function SimulateMovement(startPos, direction, maxTicks)
+	ProfilerStart(2) -- SimulateMovement profiling
+	
 	if maxTicks <= 0 then
+		ProfilerEnd(2)
 		return 0, startPos, { startPos }
 	end
 
 	local dirLen = direction:Length()
 	if dirLen == 0 then
+		ProfilerEnd(2)
 		return 0, startPos, { startPos }
 	end
 
 	-- Initialize simulation variables
 	local pLocal = entities.GetLocalPlayer()
-	if not pLocal then return 0, startPos, { startPos } end
+	if not pLocal then 
+		ProfilerEnd(2)
+		return 0, startPos, { startPos } 
+	end
 
 	local tickInterval = globals.TickInterval()
 	local gravity = client.GetConVar("sv_gravity") * tickInterval
@@ -493,6 +722,7 @@ local function SimulateMovement(startPos, direction, maxTicks)
 
 		-- If we didn't need to restart, return the results
 		if not shouldRestart then
+			ProfilerEnd(2)
 			return totalWalked, currentPos, simulationPath
 		end
 
@@ -500,6 +730,7 @@ local function SimulateMovement(startPos, direction, maxTicks)
 	end
 
 	-- If we exhausted all attempts, return what we have
+	ProfilerEnd(2)
 	return 0, startPos, { startPos }
 end
 
@@ -524,7 +755,9 @@ local function OnGround(player)
 end
 
 local function VisPos(target, vFrom, vTo)
+	ProfilerStart(5) -- VisPos profiling
 	local trace = engine.TraceLine(vFrom, vTo, MASK_SHOT | CONTENTS_GRATE)
+	ProfilerEnd(5)
 	return ((trace.entity and trace.entity == target) or (trace.fraction > 0.99))
 end
 
@@ -549,23 +782,17 @@ local function HasValidWeapon(pLocal)
 	return pWeapon and not pWeapon:IsMeleeWeapon()
 end
 
--- Optimized yaw-only FOV calculation (ignores pitch for better performance)
-local function GetYawFOV(fromPos, toPos, viewYaw)
-	local dx = toPos.x - fromPos.x
-	local dy = toPos.y - fromPos.y
+-- FOV calculation using lnxLib Math functions
+local function GetFOV(fromPos, toPos, viewAngles)
+	ProfilerStart(4) -- GetFOV profiling
 	
-	-- Calculate target yaw angle
-	local targetYaw = math.deg(math.atan(dy, dx))
-	
-	-- Calculate yaw difference
-	local yawDiff = targetYaw - viewYaw
-	
-	-- Normalize to [-180, 180]
-	while yawDiff > 180 do yawDiff = yawDiff - 360 end
-	while yawDiff < -180 do yawDiff = yawDiff + 360 end
-	
-	-- Return absolute difference
-	return math.abs(yawDiff)
+	-- Use lnxLib Math functions properly:
+	-- 1. Get the angle from player position to target position
+	local targetAngles = Math.PositionAngles(fromPos, toPos)
+	-- 2. Calculate FOV between current view angles and target angles
+	local result = Math.AngleFov(viewAngles, targetAngles)
+	ProfilerEnd(4)
+	return result
 end
 
 -- Function to calculate view position for target players (same as local player calculation)
@@ -581,22 +808,29 @@ local function GetPlayerViewPos(player)
 end
 
 local function GetHitboxPos(entity, hitbox)
+	ProfilerStart(6) -- GetHitboxPos profiling
+	
 	-- Special case for VIEWPOS - calculate view position instead of using hitbox
 	if hitbox == Hitboxes.VIEWPOS then
+		ProfilerEnd(6)
 		return GetPlayerViewPos(entity)
 	end
 
 	-- Normal hitbox handling
 	hitbox = entity:GetHitboxes()[hitbox]
 	if not hitbox then
+		ProfilerEnd(6)
 		return
 	end
 
+	ProfilerEnd(6)
 	return (hitbox[1] + hitbox[2]) * 0.5
 end
 
 -- Populate target candidates once per tick -----------------------------
 local function UpdateTargetCandidates(pLocal, pPos)
+	ProfilerStart(1) -- UpdateTargetCandidates profiling
+	
 	-- Clear previous candidates
 	TargetCandidates = {}
 
@@ -626,8 +860,8 @@ local function UpdateTargetCandidates(pLocal, pPos)
 		local headPos = GetHitboxPos(vPlayer, Hitboxes.HEAD)
 		if not headPos then goto continue end
 
-		-- Compute yaw-only FOV (optimized for peeking)
-		local fovDeg = GetYawFOV(pPos, headPos, viewAngles.y)
+		-- Compute FOV using library function
+		local fovDeg = GetFOV(pPos, headPos, viewAngles)
 		local metric = fovDeg
 
 		-- Priority bonus (lower metric = higher priority)
@@ -646,10 +880,14 @@ local function UpdateTargetCandidates(pLocal, pPos)
 	for i = 1, math.min(#candidates, Menu.TargetLimit) do
 		table.insert(TargetCandidates, candidates[i])
 	end
+	
+	ProfilerEnd(1) -- UpdateTargetCandidates profiling
 end
 
 -- Streamlined CanAttackFromPos - only visibility checking -----------------------------
 local function CanAttackFromPos(pLocal, pPos)
+	ProfilerStart(3) -- CanAttackFromPos profiling
+	
 	-- Check visibility against pre-selected candidates
 	for _, cand in ipairs(TargetCandidates) do
 		local vPlayer = cand.player
@@ -659,12 +897,14 @@ local function CanAttackFromPos(pLocal, pPos)
 				local name = Menu.HitboxOptions[i]
 				local hitboxPos = GetHitboxPos(vPlayer, Hitboxes[name])
 				if VisPos(vPlayer, pPos, hitboxPos) then
+					ProfilerEnd(3)
 					return true
 				end
 			end
 		end
 	end
 
+	ProfilerEnd(3)
 	return false
 end
 
@@ -674,26 +914,26 @@ local function ComputeMove(pCmd, a, b)
 		return Vector3(0, 0, 0)
 	end
 
-	local x = diff.x
-	local y = diff.y
-	local vSilent = Vector3(x, y, 0)
-
-	local ang = vSilent:Angles()
-	local cPitch, cYaw, cRoll = pCmd:GetViewAngles()
-	local yaw = math.rad(ang.y - cYaw)
-	local pitch = math.rad(ang.x - cPitch)
+	-- Use lnxLib Math functions for better accuracy
+	local targetAngles = Math.PositionAngles(a, b)
+	local cPitch, cYaw, cRoll = pCmd:GetViewAngles()  -- GetViewAngles returns 3 separate numbers, not an object
+	local yaw = math.rad(targetAngles.y - cYaw)
+	local pitch = math.rad(targetAngles.x - cPitch)
 	local move = Vector3(math.cos(yaw) * 450, -math.sin(yaw) * 450, -math.cos(pitch) * 450)
-
 	return move
 end
 
 -- Walks to a given destination vector
 local function WalkTo(pCmd, pLocal, pDestination)
+	ProfilerStart(8) -- WalkTo profiling
+	
 	local localPos = pLocal:GetAbsOrigin()
 	local result = ComputeMove(pCmd, localPos, pDestination)
 
 	pCmd:SetForwardMove(result.x)
 	pCmd:SetSideMove(result.y)
+	
+	ProfilerEnd(8)
 end
 
 local function DrawLine(startPos, endPos)
@@ -731,8 +971,12 @@ end
 --]]
 
 local function OnCreateMove(pCmd)
+	ProfilerStartFrame() -- Start memory tracking for this frame
+	ProfilerStart(9) -- OnCreateMove_Total profiling
+	
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal or Menu.Enabled == false then
+		ProfilerEnd(9)
 		return
 	end
 
@@ -777,7 +1021,8 @@ local function OnCreateMove(pCmd)
 			-- TODO: Particle effect
 		end
 
-		-- Direction acquisition / update
+							-- Direction acquisition / update
+		ProfilerStart(13) -- DirectionUpdate profiling
 		if Menu.PeekAssist == true and OnGround(pLocal) then
 			local intentDir = GetMovementIntent(pCmd)
 			if intentDir:Length() > 0 then
@@ -787,8 +1032,7 @@ local function OnCreateMove(pCmd)
 
 				-- Side (sign of right component) just for arrow from cover
 				local viewAnglesTmp = engine.GetViewAngles()
-				local yawTmp = math.rad(viewAnglesTmp.y)
-				local rightTmp = Vector3(-math.sin(yawTmp), math.cos(yawTmp), 0)
+				local rightTmp = viewAnglesTmp:Right()  -- Use built-in Right() method instead of manual calculation
 				PeekSide = (intentDir:Dot(rightTmp) >= 0) and -1 or 1
 
 				HasDirection = true
@@ -800,6 +1044,7 @@ local function OnCreateMove(pCmd)
 				end
 			end
 		end
+		ProfilerEnd(13) -- DirectionUpdate profiling
 
 		-- Universal shooting detection for both modes
 		if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
@@ -812,8 +1057,11 @@ local function OnCreateMove(pCmd)
 
 		-- Should we peek?
 		if Menu.PeekAssist == true and HasDirection == true then
+			ProfilerStart(11) -- PeekLogic profiling
+			
 			-- Check if we have a valid weapon for peeking
 			if not HasValidWeapon(pLocal) then
+				ProfilerEnd(11)
 				return -- Don't peek without valid weapon
 			end
 
@@ -837,6 +1085,7 @@ local function OnCreateMove(pCmd)
 
 			-- Only run binary search if we can shoot
 			if CanShoot(pLocal) then
+				ProfilerStart(7) -- BinarySearch profiling
 				-- SMART BINARY SEARCH -----------------------------
 				local function addVisual(testFeet, sees, simulationPath)
 					-- Draw the actual simulated path step by step
@@ -953,22 +1202,28 @@ local function OnCreateMove(pCmd)
 					local _, feetCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
 					bestFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
 				end
-				bestPos = bestFeet + viewOffset
+								bestPos = bestFeet + viewOffset
 
-				::after_search::
-				if bestFeet and found then
-					WalkTo(pCmd, pLocal, bestFeet)
-					CurrentBestPos = bestPos -- eye for other uses if needed
-					CurrentBestFeet = bestFeet -- add this for drawing
-				else
-					IsReturning = true
-					CurrentBestPos = nil
-					CurrentBestFeet = nil
-				end
+			::after_search::
+			ProfilerEnd(7) -- BinarySearch profiling
+			
+			if bestFeet and found then
+				WalkTo(pCmd, pLocal, bestFeet)
+				CurrentBestPos = bestPos -- eye for other uses if needed
+				CurrentBestFeet = bestFeet -- add this for drawing
+			else
+				IsReturning = true
+				CurrentBestPos = nil
+				CurrentBestFeet = nil
+			end
 			end -- End of CanShoot check
+			
+			ProfilerEnd(11) -- PeekLogic profiling
 		end
 
 		if IsReturning == true then
+			ProfilerStart(12) -- ReturnLogic profiling
+			
 			local distVector = PeekReturnVec - localPos
 			local dist = distVector:Length()
 			if dist < 7 then
@@ -976,6 +1231,7 @@ local function OnCreateMove(pCmd)
 				currentState = STATE_DEFAULT -- Reset InstantStop state
 				cooldownTicksRemaining = 0
 				if Menu.WarpBack and warp then warp.TriggerCharge() end
+				ProfilerEnd(12) -- ReturnLogic profiling
 				return
 			end
 
@@ -1024,6 +1280,8 @@ local function OnCreateMove(pCmd)
 					pLocal:SetAbsOrigin(PeekReturnVec)
 				end
 			end
+			
+			ProfilerEnd(12) -- ReturnLogic profiling
 		end
 	else
 		-- Manual mode (Peek Assist OFF) – return immediately when shooting
@@ -1124,11 +1382,188 @@ local function OnCreateMove(pCmd)
 
 		if Menu.WarpBack and warp then warp.TriggerCharge() end --remember this is hwo you recharge api is literaly this dont cahnge it
 	end
+	
+	ProfilerEnd(9) -- OnCreateMove profiling
+end
+
+-- Profiler font (create once, not every frame)
+local ProfilerFont = draw.CreateFont("Arial", 12, 400)
+
+-- Profiler visualization
+local function DrawProfiler()
+	if not ProfilerActive then return end
+	
+	-- Get screen dimensions
+	local screenW, screenH = draw.GetScreenSize()
+	local timeBarHeight = 40
+	local memoryBarHeight = 30
+	local totalBarHeight = timeBarHeight + memoryBarHeight + 10 -- 10px spacing
+	local barY = screenH - totalBarHeight - 10
+	
+	-- Draw background (x1, y1, x2, y2)
+	draw.Color(0, 0, 0, 180)
+	draw.FilledRect(0, barY - 60, screenW, barY + totalBarHeight)
+	
+	-- Draw expected frame time reference line and info
+	draw.Color(255, 255, 255, 255)
+	draw.SetFont(ProfilerFont)
+	local tickInterval = ValidateNumber(globals.TickInterval(), 1.0/66.67)
+	local expectedFrameMs = ValidateNumber(EXPECTED_FRAME_TIME * 1000, 15)
+	local expectedTickMs = ValidateNumber(EXPECTED_TICK_TIME * 1000, 15)
+	local actualFrameMs = ValidateNumber(TotalProgramTime * 1000, 0)
+	local frameUsagePercent = ValidateNumber(TotalProgramTime > 0 and (TotalProgramTime / EXPECTED_FRAME_TIME) * 100 or 0, 0)
+	local tickTime = ValidateNumber(ProfilerDisplayData[9] or 0, 0)    -- OnCreateMove_Total
+	local frameTime = ValidateNumber(ProfilerDisplayData[10] or 0, 0)  -- OnDraw_Total
+	
+	-- Expected frame time background line
+	local expectedFrameWidth = screenW -- Full width represents expected frame time
+	draw.Color(64, 64, 64, 100)
+	draw.FilledRect(0, barY + timeBarHeight - 2, expectedFrameWidth, barY + timeBarHeight + 2)
+	
+	-- Draw timing info above bars
+	draw.Color(255, 255, 255, 255)
+	draw.Text(5, barY - 58, string.format("Frame Budget: %.3fms (%.0ffps) | Actual: %.3fms (%.1f%%) | Tick: %.3fms | Draw: %.3fms", 
+		expectedFrameMs, 1.0/EXPECTED_FRAME_TIME, actualFrameMs, frameUsagePercent, tickTime * 1000, frameTime * 1000))
+	
+	-- Calculate total function memory for display
+	local totalFunctionMemoryDisplay = 0
+	for i = 1, #ProfilerFunctions do
+		totalFunctionMemoryDisplay = totalFunctionMemoryDisplay + ValidateNumber(ProfilerFunctionMemoryDisplayData[i], 0)
+	end
+	
+	draw.Text(5, barY - 42, string.format("Function Memory: %.1fKB/frame | Window: %d frames | Scale: Time=%.3fms, Memory=%.1fKB", 
+		totalFunctionMemoryDisplay, ProfilerHistoryCount, ValidateNumber(PROFILER_MAX_TIME * 1000, 15), totalFunctionMemoryDisplay))
+	
+	-- Draw function legend with percentage of frame budget
+	local legendY = barY - 22
+	local legendX = 5
+	
+	for i = 1, #ProfilerFunctions do
+		local func = ProfilerFunctions[i]
+		local functionTime = ValidateNumber(ProfilerDisplayData[i], 0)
+		local frameBudgetPercent = 0
+		
+		-- Calculate percentage relative to frame budget
+		if functionTime > 0 and EXPECTED_FRAME_TIME > 0 then
+			frameBudgetPercent = ValidateNumber((functionTime / EXPECTED_FRAME_TIME) * 100, 0)
+		end
+		
+		-- Draw colored square
+		draw.Color(func.color[1], func.color[2], func.color[3], 255)
+		draw.FilledRect(legendX, legendY, legendX + 10, legendY + 10)
+		
+		-- Draw function name with timing and percentage of frame budget
+		draw.Color(255, 255, 255, 255)
+		draw.Text(legendX + 12, legendY, string.format("%d:%s %.1f%% %.2fms", func.id, func.name:sub(1, 4), frameBudgetPercent, functionTime * 1000))
+		
+		legendX = legendX + 120
+		if legendX > screenW - 130 then
+			legendX = 5
+			legendY = legendY + 12
+		end
+	end
+	
+	-- Draw TIME BAR (upper) - scaled to frame budget
+	local timeBarY = barY
+	local currentX = 0
+	
+	for i = 1, #ProfilerFunctions do
+		local func = ProfilerFunctions[i]
+		local functionTime = ValidateNumber(ProfilerDisplayData[i], 0)
+		
+		-- Calculate bar width based on frame budget
+		local barWidth = 0
+		if EXPECTED_FRAME_TIME > 0 and functionTime > 0 then
+			-- Scale bars to percentage of frame budget
+			local frameBudgetPercent = ValidateNumber(functionTime / EXPECTED_FRAME_TIME, 0)
+			barWidth = ValidateNumber(math.floor(screenW * frameBudgetPercent), 0)
+			
+			-- Ensure even tiny percentages get at least 1 pixel if they have any time
+			if barWidth == 0 and functionTime > 0 then
+				barWidth = 1
+			end
+		end
+		
+		-- Validate bar width and position
+		barWidth = math.max(0, math.min(barWidth, screenW - currentX))
+		
+		-- Only draw bar if it has actual time (width > 0)
+		if barWidth > 0 then
+			-- Draw colored time bar (x1, y1, x2, y2)
+			draw.Color(func.color[1], func.color[2], func.color[3], 200)
+			draw.FilledRect(math.floor(currentX), math.floor(timeBarY), math.floor(currentX + barWidth), math.floor(timeBarY + timeBarHeight))
+			
+			-- Draw function info if bar is wide enough
+			if barWidth > 25 then -- Show text if bar is wide enough
+				draw.Color(255, 255, 255, 255)
+				draw.Text(math.floor(currentX + 2), math.floor(timeBarY + 2), string.format("%d", func.id))
+				draw.Text(math.floor(currentX + 2), math.floor(timeBarY + 16), string.format("%.2fms", functionTime * 1000))
+			end
+			
+			currentX = currentX + barWidth
+		end
+	end
+	
+	-- Draw MEMORY BAR (lower) - segmented by function
+	local memoryBarY = barY + timeBarHeight + 5
+	local currentMemoryX = 0
+	local totalFunctionMemory = 0
+	
+	-- Calculate total memory usage across all functions
+	for i = 1, #ProfilerFunctions do
+		totalFunctionMemory = totalFunctionMemory + ValidateNumber(ProfilerFunctionMemoryDisplayData[i], 0)
+	end
+	
+	-- Draw segmented memory bars (similar to time bars)
+	if totalFunctionMemory > 0 then
+		for i = 1, #ProfilerFunctions do
+			local func = ProfilerFunctions[i]
+			local functionMemory = ValidateNumber(ProfilerFunctionMemoryDisplayData[i], 0)
+			
+			-- Calculate bar width based on memory usage proportion
+			local memoryBarWidth = 0
+			if functionMemory > 0 then
+				-- Scale memory bars to percentage of total memory usage
+				local memoryPercent = ValidateNumber(functionMemory / totalFunctionMemory, 0)
+				-- Use a reasonable scale: if total memory > 100KB, use that as max width
+				local memoryScale = math.max(100, totalFunctionMemory) -- At least 100KB scale
+				local screenPercent = ValidateNumber(totalFunctionMemory / memoryScale, 0)
+				memoryBarWidth = ValidateNumber(math.floor(screenW * screenPercent * memoryPercent), 0)
+				
+				-- Ensure even tiny percentages get at least 1 pixel if they have memory usage
+				if memoryBarWidth == 0 and functionMemory > 0 then
+					memoryBarWidth = 1
+				end
+			end
+			
+			-- Validate bar width and position
+			memoryBarWidth = math.max(0, math.min(memoryBarWidth, screenW - currentMemoryX))
+			
+			-- Only draw bar if it has actual memory usage (width > 0)
+			if memoryBarWidth > 0 then
+				-- Draw colored memory bar using same colors as time bar
+				draw.Color(func.color[1], func.color[2], func.color[3], 150)
+				draw.FilledRect(math.floor(currentMemoryX), math.floor(memoryBarY), math.floor(currentMemoryX + memoryBarWidth), math.floor(memoryBarY + memoryBarHeight))
+				
+				-- Draw function info if bar is wide enough
+				if memoryBarWidth > 20 then -- Show text if bar is wide enough
+					draw.Color(255, 255, 255, 255)
+					draw.Text(math.floor(currentMemoryX + 2), math.floor(memoryBarY + 2), string.format("%d", func.id))
+					draw.Text(math.floor(currentMemoryX + 2), math.floor(memoryBarY + 16), string.format("%.1fKB", functionMemory))
+				end
+				
+				currentMemoryX = currentMemoryX + memoryBarWidth
+			end
+		end
+	end
 end
 
 local function OnDraw()
+	ProfilerStart(10) -- OnDraw_Total profiling
+
 	-- Menu
 	if gui.IsMenuOpen() then
+		ProfilerStart(15) -- MenuDrawing profiling
 		if TimMenu.Begin("Auto Peek") then
 			Menu.Enabled = TimMenu.Checkbox("Enable", Menu.Enabled)
 			TimMenu.NextLine()
@@ -1176,13 +1611,45 @@ local function OnDraw()
 				oldColor[3] ~= Menu.Visuals.CircleColor[3] or oldColor[4] ~= Menu.Visuals.CircleColor[4] then
 				CreateCircleTexture()
 			end
+
+			TimMenu.Separator("Profiler")
+			ProfilerActive = TimMenu.Checkbox("Enable Profiler", ProfilerActive)
+			TimMenu.Tooltip("Shows performance profiling at bottom of screen")
+			if ProfilerActive and TimMenu.Button("Reset Profiler") then
+				-- Clear all profiler data
+				for i = 1, #ProfilerFunctions do
+					ProfilerDisplayData[i] = 0
+					ProfilerFrameAccumulator[i] = 0
+					ProfilerFunctionMemoryDisplayData[i] = 0
+					ProfilerFunctionMemoryAccumulator[i] = 0
+				end
+				ProfilerFrameStartTimes = {}
+				ProfilerFunctionMemoryStart = {}
+				
+				-- Clear rolling history buffer
+				for frameIndex = 1, PROFILER_WINDOW_SIZE do
+					for funcIndex = 1, #ProfilerFunctions do
+						ProfilerHistory[frameIndex][funcIndex] = 0
+						ProfilerFunctionMemoryHistory[frameIndex][funcIndex] = 0
+					end
+				end
+				ProfilerHistoryIndex = 1
+				ProfilerHistoryCount = 0
+			end
 		end
+		ProfilerEnd(15) -- MenuDrawing profiling
 	end
 
+	-- Draw profiler (always visible when enabled)
+	DrawProfiler()
+	
 	if PosPlaced == false then
+		ProfilerEnd(10) -- OnDraw_Total profiling
+		ProfilerEndFrame()
 		return
 	end
 
+	ProfilerStart(14) -- VisualDrawing profiling
 	draw.SetFont(options.Font)
 
 	-- Draw the lines
@@ -1389,6 +1856,12 @@ local function OnDraw()
 			end
 		end
 	end
+
+	ProfilerEnd(14) -- VisualDrawing profiling
+	ProfilerEnd(10) -- OnDraw_Total profiling
+	
+	-- Update profiler display data and clear accumulator for next frame
+	ProfilerEndFrame()
 end
 
 local function OnUnload()
