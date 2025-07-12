@@ -193,6 +193,10 @@ local wasGroundedLastTick = false
 -- Add tracking for weapon shoot state
 local PrevCanShoot = false -- track if weapon could shoot in previous tick
 
+-- Global candidate list (populated once per tick)
+local TargetCandidates = {}
+local CandidatesUpdateTick = -1
+
 -- Helper from InstantStop
 local function isPlayerGrounded(player)
 	if not player then return false end
@@ -539,6 +543,12 @@ local function CanShoot(pLocal)
 	return (nextPrimaryAttack <= globals.CurTime()) and (nextAttack <= globals.CurTime())
 end
 
+-- Check if we have a valid weapon for peeking (not melee, exists)
+local function HasValidWeapon(pLocal)
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	return pWeapon and not pWeapon:IsMeleeWeapon()
+end
+
 -- Function to calculate view position for target players (same as local player calculation)
 local function GetPlayerViewPos(player)
 	if not player or not player:IsValid() then
@@ -577,11 +587,17 @@ local function GetHitboxPos(entity, hitbox)
 	return (hitbox[1] + hitbox[2]) * 0.5
 end
 
--- Modified CanAttackFromPos with target limit and priority -----------------------------
-local function CanAttackFromPos(pLocal, pPos)
-	if CanShoot(pLocal) == false then
-		return false
+-- Populate target candidates once per tick -----------------------------
+local function UpdateTargetCandidates(pLocal, pPos)
+	local currentTick = globals.TickCount()
+	if CandidatesUpdateTick == currentTick then
+		return -- Already updated this tick
 	end
+	CandidatesUpdateTick = currentTick
+
+	-- Clear previous candidates
+	TargetCandidates = {}
+
 	local ignoreFriends = gui.GetValue("ignore steam friends")
 
 	-- Build local view forward vector for FOV calculation
@@ -631,14 +647,17 @@ local function CanAttackFromPos(pLocal, pPos)
 		::continue::
 	end
 
-	-- Sort by metric ascending
+	-- Sort by metric ascending and limit to target limit
 	table.sort(candidates, function(a, b) return a.metric < b.metric end)
+	for i = 1, math.min(#candidates, Menu.TargetLimit) do
+		table.insert(TargetCandidates, candidates[i])
+	end
+end
 
-	local checked = 0
-	for _, cand in ipairs(candidates) do
-		if checked >= Menu.TargetLimit then break end
-		checked = checked + 1
-
+-- Streamlined CanAttackFromPos - only visibility checking -----------------------------
+local function CanAttackFromPos(pLocal, pPos)
+	-- Check visibility against pre-selected candidates
+	for _, cand in ipairs(TargetCandidates) do
 		local vPlayer = cand.player
 		-- Check selected hitboxes from array
 		for i, enabled in ipairs(Menu.TargetHitboxes) do
@@ -799,6 +818,11 @@ local function OnCreateMove(pCmd)
 
 		-- Should we peek?
 		if Menu.PeekAssist == true and HasDirection == true then
+			-- Check if we have a valid weapon for peeking
+			if not HasValidWeapon(pLocal) then
+				return -- Don't peek without valid weapon
+			end
+
 			LineDrawList = {}
 			CrossDrawList = {}
 
@@ -807,7 +831,19 @@ local function OnCreateMove(pCmd)
 			PeekDirectionVec = OriginalPeekDirection * (MAX_SPEED * TICK_INTERVAL * Menu.PeekTicks)
 			PeekDirectionVec.z = 0
 
-			-- SMART BINARY SEARCH -----------------------------
+			-- Update target candidates once per tick (expensive operation)
+			UpdateTargetCandidates(pLocal, PeekStartFeet + viewOffset)
+
+			-- Check if we can shoot - if not, start returning
+			if not CanShoot(pLocal) then
+				IsReturning = true
+				CurrentBestPos = nil
+				CurrentBestFeet = nil
+			end
+
+			-- Only run binary search if we can shoot
+			if CanShoot(pLocal) then
+				-- SMART BINARY SEARCH -----------------------------
 			local function addVisual(testFeet, sees, simulationPath)
 				-- Draw the actual simulated path step by step
 				if simulationPath and #simulationPath > 1 then
@@ -935,9 +971,8 @@ local function OnCreateMove(pCmd)
 				CurrentBestPos = nil
 				CurrentBestFeet = nil
 			end
+			end -- End of CanShoot check
 		end
-
-
 
 		if IsReturning == true then
 			local distVector = PeekReturnVec - localPos
@@ -999,6 +1034,11 @@ local function OnCreateMove(pCmd)
 	else
 		-- Manual mode (Peek Assist OFF) – return immediately when shooting
 		if Menu.PeekAssist == false and PosPlaced then
+			-- Update target candidates for manual mode consistency
+			if not IsReturning then
+				UpdateTargetCandidates(pLocal, pLocal:GetAbsOrigin() + viewOffset)
+			end
+
 			-- Late shooting detection to ensure we catch aimbot-set IN_ATTACK after our earlier logic
 			if (pCmd:GetButtons() & IN_ATTACK) ~= 0 and not IsReturning then
 				if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
@@ -1083,6 +1123,11 @@ local function OnCreateMove(pCmd)
 		CrossDrawList = {}
 		ShotThisTick = false
 		NeedsCyoaClose = false
+		
+		-- Reset candidates to avoid stale data
+		TargetCandidates = {}
+		CandidatesUpdateTick = -1
+		
 		if Menu.WarpBack and warp then warp.TriggerCharge() end --remember this is hwo you recharge api is literaly this dont cahnge it
 	end
 end
@@ -1218,8 +1263,46 @@ local function OnDraw()
 		end
 	end
 
-	-- Draw arrow from current player position to peek start (PeekReturnVec)
-	if Menu.PeekAssist == false then
+	-- Draw white arrow back to start position when returning
+	if IsReturning then
+		local pLocal = entities.GetLocalPlayer()
+		if pLocal then
+			draw.Color(255, 255, 255, 255) -- White color
+			local startPosScr = client.WorldToScreen(pLocal:GetAbsOrigin())
+			local endPosScr = client.WorldToScreen(PeekReturnVec)
+			if startPosScr and endPosScr then
+				draw.Line(
+					math.floor(startPosScr[1]),
+					math.floor(startPosScr[2]),
+					math.floor(endPosScr[1]),
+					math.floor(endPosScr[2])
+				)
+				-- Draw arrow head
+				local dx = endPosScr[1] - startPosScr[1]
+				local dy = endPosScr[2] - startPosScr[2]
+				local len = math.sqrt(dx * dx + dy * dy)
+				if len > 0 then
+					local ux, uy = dx / len, dy / len
+					local size = 12
+					local tipX, tipY = endPosScr[1], endPosScr[2]
+					local baseX, baseY = tipX - ux * size, tipY - uy * size
+					local leftX, leftY = baseX - uy * (size * 0.5), baseY + ux * (size * 0.5)
+					local rightX, rightY = baseX + uy * (size * 0.5), baseY - ux * (size * 0.5)
+					local triPts = {
+						{ tipX,   tipY,   0, 0 },
+						{ leftX,  leftY,  0, 0 },
+						{ rightX, rightY, 0, 0 },
+					}
+					local arrowTex = draw.CreateTextureRGBA(string.char(255, 255, 255, 255), 1, 1)
+					draw.TexturedPolygon(arrowTex, triPts, true)
+					draw.DeleteTexture(arrowTex)
+				end
+			end
+		end
+	end
+
+	-- Draw arrow from current player position to peek start (PeekReturnVec) in manual mode
+	if Menu.PeekAssist == false and not IsReturning then
 		local pLocal = entities.GetLocalPlayer()
 		if pLocal then
 			draw.Color(255, 255, 255, 255)
