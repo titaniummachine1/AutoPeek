@@ -26,11 +26,12 @@ local Menu = {
 	PeekTicks = 33, -- Max peek ticks (10-132)
 	Iterations = 7, -- Binary-search refinement passes
 	WarpBack = false, -- Warp back instantly instead of walking
+	InstantStop = false, -- Enable instant stop on shooting
 
 	TargetLimit = 3, -- Max players considered per tick
 
 	-- Target hitboxes
-	TargetHitboxes = { true, false, false, false, false, false }, -- Defaults: HEAD on, others off
+	TargetHitboxes = { true, false, false, false, false, true }, -- Defaults: HEAD on, others off
 	HitboxOptions = { "HEAD", "NECK", "PELVIS", "BODY", "CHEST", "VIEWPOS" },
 
 	-- Visuals
@@ -151,6 +152,7 @@ local function SafeInitMenu()
 	if Menu.PeekTicks == nil then Menu.PeekTicks = 66 end
 	if Menu.Iterations == nil then Menu.Iterations = 6 end
 	if Menu.WarpBack == nil then Menu.WarpBack = false end
+	if Menu.InstantStop == nil then Menu.InstantStop = true end
 	if Menu.TargetLimit == nil then Menu.TargetLimit = 5 end
 
 	-- Initialize TargetHitboxes as boolean array
@@ -880,8 +882,8 @@ local function OnCreateMove(pCmd)
 
 		-- We've just attacked. Let's return!
 		if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-			-- Trigger InstantStop on shoot tick
-			if currentState == STATE_DEFAULT and isGrounded then
+			-- Trigger InstantStop on shoot tick (only if enabled)
+			if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
 				triggerFastStop() -- cyoa open 1
 			end
 			IsReturning = true
@@ -901,19 +903,21 @@ local function OnCreateMove(pCmd)
 			-- Always set walking movement every tick during return
 			WalkTo(pCmd, pLocal, PeekReturnVec)
 
-			-- Process InstantStop state machine
-			if currentState == STATE_ENDING_FAST_STOP then
-				processEndingFastStopState() -- cyoa open 0 and enter cooldown
-			elseif currentState == STATE_COOLDOWN then
-				cooldownTicksRemaining = cooldownTicksRemaining - 1
-				if cooldownTicksRemaining <= 0 then
-					currentState = STATE_DEFAULT
-					cooldownTicksRemaining = 0
+			-- Process InstantStop state machine (only if enabled)
+			if Menu.InstantStop then
+				if currentState == STATE_ENDING_FAST_STOP then
+					processEndingFastStopState() -- cyoa open 0 and enter cooldown
+				elseif currentState == STATE_COOLDOWN then
+					cooldownTicksRemaining = cooldownTicksRemaining - 1
+					if cooldownTicksRemaining <= 0 then
+						currentState = STATE_DEFAULT
+						cooldownTicksRemaining = 0
+					end
 				end
 			end
 
-			-- Next tick: close cyoa to unfreeze and cancel scope
-			if NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+			-- Next tick: close cyoa to unfreeze and cancel scope (only if InstantStop enabled)
+			if Menu.InstantStop and NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
 				client.Command("cyoa_pda_open 0", true)
 				NeedsCyoaClose = false
 			end
@@ -947,8 +951,8 @@ local function OnCreateMove(pCmd)
 		if Menu.PeekAssist == false and PosPlaced then
 			-- Use same shooting detection as peek assist mode
 			if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-				-- Trigger InstantStop on shoot tick (same as peek assist)
-				if currentState == STATE_DEFAULT and isGrounded then
+				-- Trigger InstantStop on shoot tick (only if enabled)
+				if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
 					triggerFastStop() -- cyoa open 1
 				end
 				IsReturning = true
@@ -968,19 +972,21 @@ local function OnCreateMove(pCmd)
 				-- Always set walking movement every tick during return
 				WalkTo(pCmd, pLocal, PeekReturnVec)
 
-				-- Process InstantStop state machine (same as peek assist)
-				if currentState == STATE_ENDING_FAST_STOP then
-					processEndingFastStopState() -- cyoa open 0 and enter cooldown
-				elseif currentState == STATE_COOLDOWN then
-					cooldownTicksRemaining = cooldownTicksRemaining - 1
-					if cooldownTicksRemaining <= 0 then
-						currentState = STATE_DEFAULT
-						cooldownTicksRemaining = 0
+				-- Process InstantStop state machine (only if enabled)
+				if Menu.InstantStop then
+					if currentState == STATE_ENDING_FAST_STOP then
+						processEndingFastStopState() -- cyoa open 0 and enter cooldown
+					elseif currentState == STATE_COOLDOWN then
+						cooldownTicksRemaining = cooldownTicksRemaining - 1
+						if cooldownTicksRemaining <= 0 then
+							currentState = STATE_DEFAULT
+							cooldownTicksRemaining = 0
+						end
 					end
 				end
 
-				-- Next tick: close cyoa to unfreeze and cancel scope
-				if NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+				-- Next tick: close cyoa to unfreeze and cancel scope (only if InstantStop enabled)
+				if Menu.InstantStop and NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
 					client.Command("cyoa_pda_open 0", true)
 					NeedsCyoaClose = false
 				end
@@ -1047,6 +1053,10 @@ local function OnDraw()
 
 			Menu.WarpBack = TimMenu.Checkbox("Warp Back", Menu.WarpBack)
 			TimMenu.Tooltip("Teleports back instantly instead of walking")
+			TimMenu.NextLine()
+
+			Menu.InstantStop = TimMenu.Checkbox("Instant Stop", Menu.InstantStop)
+			TimMenu.Tooltip("Use instant stop when shooting (cyoa command)")
 			TimMenu.NextLine()
 
 			Menu.PeekTicks = TimMenu.Slider("Peek Ticks", Menu.PeekTicks, 10, 132, 1)
