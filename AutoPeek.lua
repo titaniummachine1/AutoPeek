@@ -835,8 +835,9 @@ local function OnCreateMove(pCmd)
 			local low, high, bestPos, bestFeet
 			local found = false
 			local requestedDistance, walkableDistance, simEndPos, startPath
-			local best_dist
+			local best_dist, best_ticks
 			local ignored_dist
+			local tick_floor, tick_ceil, fractional_part
 
 			local startEye = PeekStartFeet + viewOffset
 			local startVisible = CanAttackFromPos(pLocal, startEye)
@@ -874,29 +875,54 @@ local function OnCreateMove(pCmd)
 				goto after_search
 			end
 
-			low = 0.0      -- invisible
-			high = walkableDistance -- visible
+			low = 0.0      -- invisible (fractional tick count)
+			high = Menu.PeekTicks * 1.0 -- visible (fractional tick count)
 			found = true
 
 			for i = 1, Menu.Iterations do
-				local mid_dist = (low + high) * 0.5
-				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec,
-					math.floor(mid_dist / (MAX_SPEED * TICK_INTERVAL)))
+				local mid_ticks = (low + high) * 0.5  -- fractional ticks
+				tick_floor = math.floor(mid_ticks)
+				tick_ceil = math.ceil(mid_ticks)
+				fractional_part = mid_ticks - tick_floor
+
+				local testFeet, testPath
+				if tick_floor == tick_ceil or fractional_part < 0.001 then
+					-- Integer tick or very close to integer, simulate normally
+					ignored_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+				else
+					-- Fractional tick, interpolate between floor and ceil positions
+					local _, feetFloor, pathFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+					local _, feetCeil, pathCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
+					
+					-- Interpolate between the two positions
+					testFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
+					testPath = pathFloor  -- Use the floor path for visualization
+				end
+
 				local testEye = testFeet + viewOffset
 				local vis = CanAttackFromPos(pLocal, testEye)
 				addVisual(testFeet, vis, testPath)
 
 				if vis then
-					high = mid_dist
+					high = mid_ticks
 				else
-					low = mid_dist
+					low = mid_ticks
 				end
 			end
 
 			-- After loop, compute best at converged high
-			best_dist = high
-			ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec,
-				math.floor(best_dist / (MAX_SPEED * TICK_INTERVAL)))
+			best_ticks = high
+			tick_floor = math.floor(best_ticks)
+			tick_ceil = math.ceil(best_ticks)
+			fractional_part = best_ticks - tick_floor
+			
+			if tick_floor == tick_ceil or fractional_part < 0.001 then
+				ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+			else
+				local _, feetFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+				local _, feetCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
+				bestFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
+			end
 			bestPos = bestFeet + viewOffset
 
 			::after_search::
