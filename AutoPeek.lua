@@ -190,6 +190,9 @@ local currentState = STATE_DEFAULT
 local cooldownTicksRemaining = 0
 local wasGroundedLastTick = false
 
+-- Add tracking for weapon shoot state
+local PrevCanShoot = false -- track if weapon could shoot in previous tick
+
 -- Helper from InstantStop
 local function isPlayerGrounded(player)
 	if not player then return false end
@@ -728,6 +731,25 @@ local function OnCreateMove(pCmd)
 	end
 	wasGroundedLastTick = isGrounded
 
+	-- Inside OnCreateMove at beginning of function after computing isGrounded, compute shotFired
+	local currentCanShoot = CanShoot(pLocal)
+	if currentCanShoot ~= PrevCanShoot then
+		if currentCanShoot == false and PrevCanShoot == true then
+			-- Weapon just fired, check if we were peeking and should return
+			if PosPlaced and IsReturning == false then
+				IsReturning = true
+				CurrentBestPos = nil -- Clear best position if returning
+				CurrentBestFeet = nil
+				LineDrawList = {}
+				CrossDrawList = {}
+				if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
+					triggerFastStop() -- cyoa open 1
+				end
+			end
+		end
+		PrevCanShoot = currentCanShoot
+	end
+
 	if pLocal:IsAlive() and input.IsButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13)) then
 		local localPos = pLocal:GetAbsOrigin()
 
@@ -764,6 +786,15 @@ local function OnCreateMove(pCmd)
 					PeekStartEye = PeekStartFeet + viewOffset
 				end
 			end
+		end
+
+		-- Universal shooting detection for both modes
+		if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+			-- Trigger InstantStop on shoot tick (only if enabled)
+			if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
+				triggerFastStop() -- cyoa open 1
+			end
+			IsReturning = true
 		end
 
 		-- Should we peek?
@@ -880,14 +911,7 @@ local function OnCreateMove(pCmd)
 			end
 		end
 
-		-- We've just attacked. Let's return!
-		if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-			-- Trigger InstantStop on shoot tick (only if enabled)
-			if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
-				triggerFastStop() -- cyoa open 1
-			end
-			IsReturning = true
-		end
+
 
 		if IsReturning == true then
 			local distVector = PeekReturnVec - localPos
@@ -949,15 +973,13 @@ local function OnCreateMove(pCmd)
 	else
 		-- Manual mode (Peek Assist OFF) – return immediately when shooting
 		if Menu.PeekAssist == false and PosPlaced then
-			-- Use same shooting detection as peek assist mode
-			if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
-				-- Trigger InstantStop on shoot tick (only if enabled)
+			-- Late shooting detection to ensure we catch aimbot-set IN_ATTACK after our earlier logic
+			if (pCmd:GetButtons() & IN_ATTACK) ~= 0 and not IsReturning then
 				if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
 					triggerFastStop() -- cyoa open 1
 				end
 				IsReturning = true
 			end
-
 			if IsReturning == true then
 				local distVector = PeekReturnVec - localPos
 				local dist = distVector:Length()
@@ -1016,6 +1038,10 @@ local function OnCreateMove(pCmd)
 				end
 			end
 		end
+	end
+
+	-- Key not pressed - reset all variables
+	if not (pLocal:IsAlive() and input.IsButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13))) then
 		PosPlaced = false
 		IsReturning = false
 		HasDirection = false
