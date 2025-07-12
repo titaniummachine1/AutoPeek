@@ -23,7 +23,7 @@ local Menu = {
 	Enabled = true,
 	Key = KEY_LSHIFT,  -- Hold this key to start peeking
 	PeekAssist = true, -- Enables peek assist (smart mode). Disable for manual return
-	Distance = 200,    -- Max peek distance
+	PeekTicks = 66,    -- Max peek ticks (10-132)
 	Iterations = 7,    -- Binary-search refinement passes
 	WarpBack = true,   -- Warp back instantly instead of walking
 
@@ -148,7 +148,7 @@ local function SafeInitMenu()
 	if Menu.Enabled == nil then Menu.Enabled = true end
 	Menu.Key = Menu.Key or KEY_LSHIFT
 	if Menu.PeekAssist == nil then Menu.PeekAssist = true end
-	if Menu.Distance == nil then Menu.Distance = 100 end
+	if Menu.PeekTicks == nil then Menu.PeekTicks = 66 end
 	if Menu.Iterations == nil then Menu.Iterations = 6 end
 	if Menu.WarpBack == nil then Menu.WarpBack = false end
 	if Menu.TargetLimit == nil then Menu.TargetLimit = 5 end
@@ -353,8 +353,8 @@ end
 
 -- Improved simulation function with wall direction correction
 -- Returns the walkable distance actually simulated, final feet position, and path taken
-local function SimulateMovement(startPos, direction, maxDistance)
-    if maxDistance <= 0 then
+local function SimulateMovement(startPos, direction, maxTicks)
+    if maxTicks <= 0 then
         return 0, startPos, {startPos}
     end
 
@@ -393,7 +393,7 @@ local function SimulateMovement(startPos, direction, maxDistance)
         local shouldRestart = false
         
         -- Simulate movement tick by tick
-        for tick = 1, SIMULATION_TICKS do
+        for tick = 1, maxTicks do
             -- Calculate next position
             local nextPos = currentPos + currentVel * tickInterval
             
@@ -473,10 +473,7 @@ local function SimulateMovement(startPos, direction, maxDistance)
             currentPos = nextPos
             table.insert(simulationPath, currentPos)
             
-            -- Check if we've reached our maximum distance
-            if totalWalked >= maxDistance then
-                break
-            end
+            -- Tick-based simulation, no distance check needed
             
             -- Check if we've stopped moving (stuck)
             if stepDistance < 1 then
@@ -718,7 +715,7 @@ local function OnCreateMove(pCmd)
 			if intentDir:Length() > 0 then
 				-- Either first-time setup or user changed direction while peeking
 				OriginalPeekDirection = intentDir
-				PeekDirectionVec = OriginalPeekDirection * Menu.Distance
+				PeekDirectionVec = OriginalPeekDirection * (MAX_SPEED * TICK_INTERVAL * Menu.PeekTicks)
 
 				-- Side (sign of right component) just for arrow from cover
 				local viewAnglesTmp = engine.GetViewAngles()
@@ -743,7 +740,7 @@ local function OnCreateMove(pCmd)
 
 			-- Anchor (PeekStartVec) remains constant – do not overwrite each tick
 			-- Recompute direction vector each tick based on current view yaw
-			PeekDirectionVec = OriginalPeekDirection * Menu.Distance
+			PeekDirectionVec = OriginalPeekDirection * (MAX_SPEED * TICK_INTERVAL * Menu.PeekTicks)
 			PeekDirectionVec.z = 0
 
 			-- SMART BINARY SEARCH -----------------------------
@@ -788,8 +785,7 @@ local function OnCreateMove(pCmd)
 				goto after_search
 			end
 
-			requestedDistance = PeekDirectionVec:Length()
-			walkableDistance, farFeet, farPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, requestedDistance)
+			walkableDistance, farFeet, farPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, Menu.PeekTicks)
 
 			if walkableDistance > 0 then
 				CurrentPeekBasisDir = farFeet - PeekStartFeet
@@ -820,7 +816,7 @@ local function OnCreateMove(pCmd)
 
 			for i = 1, Menu.Iterations do
 				local mid_dist = (low + high) * 0.5
-				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, mid_dist)
+				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, math.floor(mid_dist / (MAX_SPEED * TICK_INTERVAL)))
 				local testEye = testFeet + viewOffset
 				local vis = CanAttackFromPos(pLocal, testEye)
 				addVisual(testFeet, vis, testPath)
@@ -834,7 +830,7 @@ local function OnCreateMove(pCmd)
 
 			-- After loop, compute best at converged high
 			best_dist = high
-			ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, best_dist)
+			ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, math.floor(best_dist / (MAX_SPEED * TICK_INTERVAL)))
 			bestPos = bestFeet + viewOffset
 
 			::after_search::
@@ -1008,7 +1004,7 @@ local function OnDraw()
 			TimMenu.Tooltip("Teleports back instantly instead of walking")
 			TimMenu.NextLine()
 
-			Menu.Distance = TimMenu.Slider("Distance", Menu.Distance, 20, 400, 5)
+			Menu.PeekTicks = TimMenu.Slider("Peek Ticks", Menu.PeekTicks, 10, 132, 1)
 			TimMenu.NextLine()
 
 			Menu.Iterations = TimMenu.Slider("Iterations", Menu.Iterations, 1, 15, 1)
