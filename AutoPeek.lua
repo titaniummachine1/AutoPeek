@@ -340,15 +340,9 @@ local function SimulateMovement(startPos, direction, maxDistance)
 		local dropTrace = engine.TraceHull(dropStart, dropEnd, PlayerHullMins, PlayerHullMaxs, MASK_PLAYERSOLID)
 		
 		-- Check if we would fall (no ground found within step height)
-		if dropTrace.fraction >= 1.0 then
+		-- fraction == 1.0 means trace didn't hit anything = we would fall
+		if dropTrace.fraction == 1.0 then
 			-- No ground within step height => would fall; abort simulation
-			break
-		end
-
-		-- Check if we're falling too far (more than step height means we're falling off something)
-		local fallDistance = (dropStart - dropTrace.endpos):Length()
-		if fallDistance > STEP_HEIGHT then
-			-- We're falling more than a step, stop simulation
 			break
 		end
 
