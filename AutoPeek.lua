@@ -315,9 +315,12 @@ local function handleForwardCollision(vel, wallTrace, originalDirection)
             -- Return special flag to indicate simulation should restart
             return wallTrace.endpos.x, wallTrace.endpos.y, vel, newDirection, true
         end
+    else
+        -- Shallow angle (< 50 degrees) - stop simulation
+        return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, true -- added stop flag
     end
     
-    -- Normal wall sliding for angles < 50 degrees
+    -- Normal wall sliding for very steep walls
     local wallAngle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
     if wallAngle > FORWARD_COLLISION_ANGLE then
         -- The wall is steep, slide along it
@@ -325,7 +328,7 @@ local function handleForwardCollision(vel, wallTrace, originalDirection)
         vel = vel - normal * dot
     end
 
-    return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false
+    return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, false
 end
 
 -- Function to handle ground collision
@@ -410,12 +413,15 @@ local function SimulateMovement(startPos, direction, maxDistance)
                     break
                 else
                     -- Handle wall collision with potential direction change
-                    local newX, newY, newVel, newDirection, restart = handleForwardCollision(currentVel, wallTrace, currentDirection)
+                    local newX, newY, newVel, newDirection, restart, stop = handleForwardCollision(currentVel, wallTrace, currentDirection)
                     
                     if restart and newDirection then
                         -- Wall hit at 50+ degrees - restart simulation with new direction
                         currentDirection = newDirection
                         shouldRestart = true
+                        break
+                    elseif stop then
+                        -- Wall hit at shallow angle (< 50 degrees) - stop simulation
                         break
                     else
                         -- Normal wall sliding
