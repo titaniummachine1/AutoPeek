@@ -1,5 +1,4 @@
 # AutoPeek
-
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2Ftitaniummachine1%2FAutoPeek&label=Visitors&countColor=%23263759&style=plastic)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub issues](https://img.shields.io/github/issues/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/issues)
