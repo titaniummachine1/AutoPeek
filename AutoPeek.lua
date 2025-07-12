@@ -339,12 +339,14 @@ local function SimulateMovement(startPos, direction, maxDistance)
 		local dropEnd = dropStart - Vector3(0, 0, STEP_HEIGHT + 1)
 		local dropTrace = engine.TraceHull(dropStart, dropEnd, PlayerHullMins, PlayerHullMaxs, MASK_PLAYERSOLID)
 		
-		-- Check if we would fall (no ground found within step height)
+		-- TEMPORARILY DISABLED: Check if we would fall (no ground found within step height)
 		-- fraction == 1.0 means trace didn't hit anything = we would fall
+		--[[
 		if dropTrace.fraction == 1.0 then
 			-- No ground within step height => would fall; abort simulation
 			break
 		end
+		--]]
 
 		-- Update position on ground and distance walked
 		currentPos = dropTrace.endpos
