@@ -1,15 +1,16 @@
 # AutoPeek
+
 ![Visitors](https://api.visitorbadge.io/api/visitors?path=https%3A%2F%2Fgithub.com%2Ftitaniummachine1%2FAutoPeek&label=Visitors&countColor=%23263759&style=plastic)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub issues](https://img.shields.io/github/issues/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/issues)
 [![GitHub forks](https://img.shields.io/github/forks/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/network)
 [![GitHub stars](https://img.shields.io/github/stars/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/stargazers)
 
-[![GitHub downloads](https://img.shields.io/github/downloads/titaniummachine1/AutoPeek/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/AutoPeek/releases/latest/download/AutoPeek.lua)
+<!-- [![GitHub downloads](https://img.shields.io/github/downloads/titaniummachine1/AutoPeek/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/AutoPeek/releases/latest/download/AutoPeek.lua) -->
 
 ---
 
-<img width="360" height="607" alt="image" src="https://github.com/user-attachments/assets/045e1c37-309e-42e0-bb32-2e39d540b04c" />
+![AutoPeek Showcase](https://github.com/user-attachments/assets/5361d5e6-9f30-4390-9ef9-ed83f2d66f8e)
 
 ---
 
@@ -27,7 +28,7 @@ Click on the buttons below to download the requirements:
 
 [![LuaLib](https://img.shields.io/badge/Download-Latest-blue?style=for-the-badge&logo=download)](https://github.com/lnx00/Lmaobox-Library/releases/latest/) and copy the `lnxLib.lua` file to your `%localappdata%` folder.
 
-[![ImMenu](https://img.shields.io/badge/Download-ImMenu.lua_lnx00-blue?style=for-the-badge&logo=github)](https://github.com/lnx00/Lmaobox-ImMenu/blob/main/src/ImMenu.lua) and copy the `ImMenu.lua` file to your `%localappdata%` folder.
+[![TimMenu](https://img.shields.io/badge/Download-TimMenu.lua-blue?style=for-the-badge&logo=github)](https://github.com/titaniummachine1/TimMenu/blob/main/TimMenu.lua) and copy the `TimMenu.lua` file to your `%localappdata%` folder.
 
 ## Download
 
