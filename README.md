@@ -10,7 +10,7 @@
 
 ---
 
-![AutoPeek Showcase](https://github.com/user-attachments/assets/5361d5e6-9f30-4390-9ef9-ed83f2d66f8e)
+<img width="360" height="607" alt="image" src="https://github.com/user-attachments/assets/045e1c37-309e-42e0-bb32-2e39d540b04c" />
 
 ---
 
