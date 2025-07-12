@@ -6,7 +6,7 @@
 [![GitHub forks](https://img.shields.io/github/forks/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/network)
 [![GitHub stars](https://img.shields.io/github/stars/titaniummachine1/AutoPeek.svg)](https://github.com/titaniummachine1/AutoPeek/stargazers)
 
-<!-- [![GitHub downloads](https://img.shields.io/github/downloads/titaniummachine1/AutoPeek/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/AutoPeek/releases/latest/download/AutoPeek.lua) -->
+[![GitHub downloads](https://img.shields.io/github/downloads/titaniummachine1/AutoPeek/total.svg?style=for-the-badge&logo=download&label=Download%20Latest)](https://github.com/titaniummachine1/AutoPeek/releases/latest/download/AutoPeek.lua)
 
 ---
 
