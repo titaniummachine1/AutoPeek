@@ -1,0 +1,25 @@
+# Reference files (not part of the main project)
+/refrence/
+
+# IDE and editor files
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp 
