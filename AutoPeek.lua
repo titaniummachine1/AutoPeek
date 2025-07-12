@@ -21,13 +21,13 @@ local options = {
 local Menu = {
 	-- Main settings
 	Enabled = true,
-	Key = KEY_LSHIFT,  -- Hold this key to start peeking
+	Key = KEY_LSHIFT, -- Hold this key to start peeking
 	PeekAssist = true, -- Enables peek assist (smart mode). Disable for manual return
-	PeekTicks = 33,    -- Max peek ticks (10-132)
-	Iterations = 7,    -- Binary-search refinement passes
-	WarpBack = false,   -- Warp back instantly instead of walking
+	PeekTicks = 33, -- Max peek ticks (10-132)
+	Iterations = 7, -- Binary-search refinement passes
+	WarpBack = false, -- Warp back instantly instead of walking
 
-	TargetLimit = 3,   -- Max players considered per tick
+	TargetLimit = 3, -- Max players considered per tick
 
 	-- Target hitboxes
 	TargetHitboxes = { true, false, false, false, false, false }, -- Defaults: HEAD on, others off
@@ -282,215 +282,216 @@ local UP_VECTOR = Vector3(0, 0, 1)
 
 -- Helper function to determine if an entity should be hit during simulation
 local function shouldHitEntity(entity)
-    if not entity or not entity:IsValid() then return false end
-    
-    local ignoreClasses = {"CTFAmmoPack", "CTFDroppedWeapon"}
-    for _, ignoreClass in ipairs(ignoreClasses) do
-        if entity:GetClass() == ignoreClass then return false end
-    end
-    
-    local pLocal = entities.GetLocalPlayer()
-    if not pLocal then return true end
-    
-    if entity:GetName() == pLocal:GetName() then return false end -- ignore self
-    if entity:GetTeamNumber() == pLocal:GetTeamNumber() then return false end -- ignore teammates
-    
-    return true
+	if not entity or not entity:IsValid() then return false end
+
+	local ignoreClasses = { "CTFAmmoPack", "CTFDroppedWeapon" }
+	for _, ignoreClass in ipairs(ignoreClasses) do
+		if entity:GetClass() == ignoreClass then return false end
+	end
+
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then return true end
+
+	if entity:GetName() == pLocal:GetName() then return false end             -- ignore self
+	if entity:GetTeamNumber() == pLocal:GetTeamNumber() then return false end -- ignore teammates
+
+	return true
 end
 
 -- Function to handle forward collision with wall sliding and direction correction
 local function handleForwardCollision(vel, wallTrace, originalDirection)
-    local normal = wallTrace.plane
-    local angle = math.deg(math.acos(math.abs(originalDirection:Dot(normal))))
+	local normal = wallTrace.plane
+	local angle = math.deg(math.acos(math.abs(originalDirection:Dot(normal))))
 
-    -- If angle is 50+ degrees, redirect simulation parallel to wall
-    if angle >= 50 then
-        -- Calculate direction parallel to the wall surface
-        local dot = originalDirection:Dot(normal)
-        local newDirection = originalDirection - normal * dot
-        
-        -- Normalize the new direction
-        if newDirection:Length() > 0 then
-            newDirection = newDirection / newDirection:Length()
-            -- Return special flag to indicate simulation should restart
-            return wallTrace.endpos.x, wallTrace.endpos.y, vel, newDirection, true
-        end
-    else
-        -- Shallow angle (< 50 degrees) - stop simulation
-        return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, true -- added stop flag
-    end
-    
-    -- Normal wall sliding for very steep walls
-    local wallAngle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
-    if wallAngle > FORWARD_COLLISION_ANGLE then
-        -- The wall is steep, slide along it
-        local dot = vel:Dot(normal)
-        vel = vel - normal * dot
-    end
+	-- If angle is 50+ degrees, redirect simulation parallel to wall
+	if angle >= 50 then
+		-- Calculate direction parallel to the wall surface
+		local dot = originalDirection:Dot(normal)
+		local newDirection = originalDirection - normal * dot
 
-    return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, false
+		-- Normalize the new direction
+		if newDirection:Length() > 0 then
+			newDirection = newDirection / newDirection:Length()
+			-- Return special flag to indicate simulation should restart
+			return wallTrace.endpos.x, wallTrace.endpos.y, vel, newDirection, true
+		end
+	else
+		-- Shallow angle (< 50 degrees) - stop simulation
+		return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, true -- added stop flag
+	end
+
+	-- Normal wall sliding for very steep walls
+	local wallAngle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
+	if wallAngle > FORWARD_COLLISION_ANGLE then
+		-- The wall is steep, slide along it
+		local dot = vel:Dot(normal)
+		vel = vel - normal * dot
+	end
+
+	return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false, false
 end
 
 -- Function to handle ground collision
 local function handleGroundCollision(vel, groundTrace)
-    local normal = groundTrace.plane
-    local angle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
-    local onGround = false
+	local normal = groundTrace.plane
+	local angle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
+	local onGround = false
 
-    if angle < GROUND_COLLISION_ANGLE_LOW then
-        onGround = true
-    elseif angle < GROUND_COLLISION_ANGLE_HIGH then
-        vel.x, vel.y, vel.z = 0, 0, 0
-    else
-        local dot = vel:Dot(normal)
-        vel = vel - normal * dot
-        onGround = true
-    end
+	if angle < GROUND_COLLISION_ANGLE_LOW then
+		onGround = true
+	elseif angle < GROUND_COLLISION_ANGLE_HIGH then
+		vel.x, vel.y, vel.z = 0, 0, 0
+	else
+		local dot = vel:Dot(normal)
+		vel = vel - normal * dot
+		onGround = true
+	end
 
-    if onGround then vel.z = 0 end
-    return groundTrace.endpos, onGround, vel
+	if onGround then vel.z = 0 end
+	return groundTrace.endpos, onGround, vel
 end
 
 -- Improved simulation function with wall direction correction
 -- Returns the walkable distance actually simulated, final feet position, and path taken
 local function SimulateMovement(startPos, direction, maxTicks)
-    if maxTicks <= 0 then
-        return 0, startPos, {startPos}
-    end
+	if maxTicks <= 0 then
+		return 0, startPos, { startPos }
+	end
 
-    local dirLen = direction:Length()
-    if dirLen == 0 then
-        return 0, startPos, {startPos}
-    end
+	local dirLen = direction:Length()
+	if dirLen == 0 then
+		return 0, startPos, { startPos }
+	end
 
-    -- Initialize simulation variables
-    local pLocal = entities.GetLocalPlayer()
-    if not pLocal then return 0, startPos, {startPos} end
-    
-    local tickInterval = globals.TickInterval()
-    local gravity = client.GetConVar("sv_gravity") * tickInterval
-    local stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
-    local flags = pLocal:GetPropInt("m_fFlags") or 0
-    
-    -- Current simulation direction (can be modified by wall hits)
-    local currentDirection = direction / dirLen -- normalized
-    local simulationAttempts = 0
-    local maxAttempts = 3 -- Prevent infinite loops
-    
-    -- Main simulation loop with direction correction
-    while simulationAttempts < maxAttempts do
-        simulationAttempts = simulationAttempts + 1
-        
-        -- Normalize direction and set to player's movement speed
-        local simulatedVelocity = currentDirection * MAX_SPEED
-        
-        -- Initialize simulation state
-        local currentPos = startPos
-        local currentVel = simulatedVelocity
-        local onGround = (flags & 1) ~= 0 -- Check if initially on ground
-        local totalWalked = 0
-        local simulationPath = {startPos}
-        local shouldRestart = false
-        
-        -- Simulate movement tick by tick
-        for tick = 1, maxTicks do
-            -- Calculate next position
-            local nextPos = currentPos + currentVel * tickInterval
-            
-            -- Forward collision check (wall detection)
-            local wallTrace = engine.TraceHull(
-                currentPos + STEP_HEIGHT_VECTOR, 
-                nextPos + STEP_HEIGHT_VECTOR, 
-                PLAYER_HULL.Min, 
-                PLAYER_HULL.Max, 
-                MASK_PLAYERSOLID, 
-                shouldHitEntity
-            )
-            
-            if wallTrace.fraction < 1 then
-                if wallTrace.entity and wallTrace.entity:GetClass() == "CTFPlayer" then
-                    -- Hit a player, stop simulation
-                    break
-                else
-                    -- Handle wall collision with potential direction change
-                    local newX, newY, newVel, newDirection, restart, stop = handleForwardCollision(currentVel, wallTrace, currentDirection)
-                    
-                    if restart and newDirection then
-                        -- Wall hit at 50+ degrees - restart simulation with new direction
-                        currentDirection = newDirection
-                        shouldRestart = true
-                        break
-                    elseif stop then
-                        -- Wall hit at shallow angle (< 50 degrees) - stop simulation
-                        break
-                    else
-                        -- Normal wall sliding
-                        nextPos.x, nextPos.y, currentVel = newX, newY, newVel
-                    end
-                end
-            end
-            
-            if shouldRestart then
-                break
-            end
-            
-            -- Ground collision check
-            local downStep = onGround and STEP_HEIGHT_VECTOR or Vector3(0, 0, 0)
-            local groundTrace = engine.TraceHull(
-                nextPos + STEP_HEIGHT_VECTOR, 
-                nextPos - downStep, 
-                PLAYER_HULL.Min, 
-                PLAYER_HULL.Max, 
-                MASK_PLAYERSOLID, 
-                shouldHitEntity
-            )
-            
-            if groundTrace.fraction < 1 then
-                nextPos, onGround, currentVel = handleGroundCollision(currentVel, groundTrace)
-            else
-                -- No ground found
-                if onGround then
-                    -- We were on ground but now we're not - we're falling
-                    onGround = false
-                end
-                -- Check if we're falling too far (would fall off)
-                if groundTrace.fraction == 1.0 then
-                    -- No ground within step height, stop simulation
-                    break
-                end
-            end
-            
-            -- Apply gravity if not on ground
-            if not onGround then
-                currentVel.z = currentVel.z - gravity
-            end
-            
-            -- Calculate distance walked this tick
-            local stepDistance = (nextPos - currentPos):Length()
-            totalWalked = totalWalked + stepDistance
-            
-            -- Update position
-            currentPos = nextPos
-            table.insert(simulationPath, currentPos)
-            
-            -- Tick-based simulation, no distance check needed
-            
-            -- Check if we've stopped moving (stuck)
-            if stepDistance < 1 then
-                break
-            end
-        end
-        
-        -- If we didn't need to restart, return the results
-        if not shouldRestart then
-            return totalWalked, currentPos, simulationPath
-        end
-        
-        -- Continue loop with new direction if restarting
-    end
-    
-    -- If we exhausted all attempts, return what we have
-    return 0, startPos, {startPos}
+	-- Initialize simulation variables
+	local pLocal = entities.GetLocalPlayer()
+	if not pLocal then return 0, startPos, { startPos } end
+
+	local tickInterval = globals.TickInterval()
+	local gravity = client.GetConVar("sv_gravity") * tickInterval
+	local stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
+	local flags = pLocal:GetPropInt("m_fFlags") or 0
+
+	-- Current simulation direction (can be modified by wall hits)
+	local currentDirection = direction / dirLen -- normalized
+	local simulationAttempts = 0
+	local maxAttempts = 3                       -- Prevent infinite loops
+
+	-- Main simulation loop with direction correction
+	while simulationAttempts < maxAttempts do
+		simulationAttempts = simulationAttempts + 1
+
+		-- Normalize direction and set to player's movement speed
+		local simulatedVelocity = currentDirection * MAX_SPEED
+
+		-- Initialize simulation state
+		local currentPos = startPos
+		local currentVel = simulatedVelocity
+		local onGround = (flags & 1) ~= 0 -- Check if initially on ground
+		local totalWalked = 0
+		local simulationPath = { startPos }
+		local shouldRestart = false
+
+		-- Simulate movement tick by tick
+		for tick = 1, maxTicks do
+			-- Calculate next position
+			local nextPos = currentPos + currentVel * tickInterval
+
+			-- Forward collision check (wall detection)
+			local wallTrace = engine.TraceHull(
+				currentPos + STEP_HEIGHT_VECTOR,
+				nextPos + STEP_HEIGHT_VECTOR,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
+
+			if wallTrace.fraction < 1 then
+				if wallTrace.entity and wallTrace.entity:GetClass() == "CTFPlayer" then
+					-- Hit a player, stop simulation
+					break
+				else
+					-- Handle wall collision with potential direction change
+					local newX, newY, newVel, newDirection, restart, stop = handleForwardCollision(currentVel, wallTrace,
+						currentDirection)
+
+					if restart and newDirection then
+						-- Wall hit at 50+ degrees - restart simulation with new direction
+						currentDirection = newDirection
+						shouldRestart = true
+						break
+					elseif stop then
+						-- Wall hit at shallow angle (< 50 degrees) - stop simulation
+						break
+					else
+						-- Normal wall sliding
+						nextPos.x, nextPos.y, currentVel = newX, newY, newVel
+					end
+				end
+			end
+
+			if shouldRestart then
+				break
+			end
+
+			-- Ground collision check
+			local downStep = onGround and STEP_HEIGHT_VECTOR or Vector3(0, 0, 0)
+			local groundTrace = engine.TraceHull(
+				nextPos + STEP_HEIGHT_VECTOR,
+				nextPos - downStep,
+				PLAYER_HULL.Min,
+				PLAYER_HULL.Max,
+				MASK_PLAYERSOLID,
+				shouldHitEntity
+			)
+
+			if groundTrace.fraction < 1 then
+				nextPos, onGround, currentVel = handleGroundCollision(currentVel, groundTrace)
+			else
+				-- No ground found
+				if onGround then
+					-- We were on ground but now we're not - we're falling
+					onGround = false
+				end
+				-- Check if we're falling too far (would fall off)
+				if groundTrace.fraction == 1.0 then
+					-- No ground within step height, stop simulation
+					break
+				end
+			end
+
+			-- Apply gravity if not on ground
+			if not onGround then
+				currentVel.z = currentVel.z - gravity
+			end
+
+			-- Calculate distance walked this tick
+			local stepDistance = (nextPos - currentPos):Length()
+			totalWalked = totalWalked + stepDistance
+
+			-- Update position
+			currentPos = nextPos
+			table.insert(simulationPath, currentPos)
+
+			-- Tick-based simulation, no distance check needed
+
+			-- Check if we've stopped moving (stuck)
+			if stepDistance < 1 then
+				break
+			end
+		end
+
+		-- If we didn't need to restart, return the results
+		if not shouldRestart then
+			return totalWalked, currentPos, simulationPath
+		end
+
+		-- Continue loop with new direction if restarting
+	end
+
+	-- If we exhausted all attempts, return what we have
+	return 0, startPos, { startPos }
 end
 
 
@@ -538,20 +539,20 @@ local function GetPlayerViewPos(player)
 	if not player or not player:IsValid() then
 		return nil
 	end
-	
+
 	-- Get player's origin (feet position)
 	local playerOrigin = player:GetAbsOrigin()
 	if not playerOrigin then
 		return nil
 	end
-	
+
 	-- Get player's view offset (same calculation as local player)
 	local viewOffset = player:GetPropVector("localdata", "m_vecViewOffset[0]")
 	if not viewOffset then
 		-- Fallback to default view offset if property not available
 		viewOffset = Vector3(0, 0, 64) -- Default TF2 view height
 	end
-	
+
 	-- Calculate view position (origin + view offset)
 	return playerOrigin + viewOffset
 end
@@ -561,7 +562,7 @@ local function GetHitboxPos(entity, hitbox)
 	if hitbox == Hitboxes.VIEWPOS then
 		return GetPlayerViewPos(entity)
 	end
-	
+
 	-- Normal hitbox handling
 	local hitbox = entity:GetHitboxes()[hitbox]
 	if not hitbox then
@@ -614,7 +615,7 @@ local function CanAttackFromPos(pLocal, pPos)
 		-- Priority bonus
 		local classId = vPlayer:GetPropInt("m_iClass") or 0
 		local bonus = 0
-		if classId == 2 then     -- Sniper
+		if classId == 2 then -- Sniper
 			bonus = 100
 		elseif classId == 8 then -- Spy
 			bonus = 50
@@ -781,7 +782,7 @@ local function OnCreateMove(pCmd)
 						DrawLine(simulationPath[i], simulationPath[i + 1])
 					end
 				end
-				
+
 				-- Draw perpendicular cross at final position
 				local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
 				local dirLen = CurrentPeekBasisDir:Length()
@@ -808,7 +809,7 @@ local function OnCreateMove(pCmd)
 			local startVisible = CanAttackFromPos(pLocal, startEye)
 			if startVisible then
 				CurrentBestPos = startEye
-				addVisual(PeekStartFeet, true, {PeekStartFeet})
+				addVisual(PeekStartFeet, true, { PeekStartFeet })
 				found = true
 				bestFeet = PeekStartFeet
 				bestPos = startEye
@@ -846,7 +847,8 @@ local function OnCreateMove(pCmd)
 
 			for i = 1, Menu.Iterations do
 				local mid_dist = (low + high) * 0.5
-				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, math.floor(mid_dist / (MAX_SPEED * TICK_INTERVAL)))
+				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec,
+					math.floor(mid_dist / (MAX_SPEED * TICK_INTERVAL)))
 				local testEye = testFeet + viewOffset
 				local vis = CanAttackFromPos(pLocal, testEye)
 				addVisual(testFeet, vis, testPath)
@@ -860,7 +862,8 @@ local function OnCreateMove(pCmd)
 
 			-- After loop, compute best at converged high
 			best_dist = high
-			ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, math.floor(best_dist / (MAX_SPEED * TICK_INTERVAL)))
+			ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec,
+				math.floor(best_dist / (MAX_SPEED * TICK_INTERVAL)))
 			bestPos = bestFeet + viewOffset
 
 			::after_search::
@@ -919,18 +922,18 @@ local function OnCreateMove(pCmd)
 			if Menu.WarpBack then
 				local velocity = pLocal:EstimateAbsVelocity()
 				local speed = velocity:Length2D()
-				
+
 				-- Check if velocity is pointing towards return position
 				local toReturn = PeekReturnVec - localPos
 				toReturn.z = 0 -- ignore vertical
 				local velocityDir = Vector3(velocity.x, velocity.y, 0)
-				
+
 				local canWarp = false
 				if toReturn:Length() > 0 and velocityDir:Length() > 0 then
 					local dot = toReturn:Dot(velocityDir)
 					canWarp = dot > 0 -- positive dot means same direction
 				end
-				
+
 				if warp and not warp.IsWarping() and (warp.GetChargedTicks() or 0) > 0 and canWarp then
 					warp.TriggerWarp()
 				end
@@ -951,7 +954,7 @@ local function OnCreateMove(pCmd)
 				end
 				IsReturning = true
 			end
-			
+
 			-- Next tick: close cyoa to unfreeze and cancel scope
 			if NeedsCyoaClose and not (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
 				client.Command("cyoa_pda_open 0", true)
@@ -969,23 +972,23 @@ local function OnCreateMove(pCmd)
 
 				-- First set walking movement, then warp
 				WalkTo(pCmd, pLocal, PeekReturnVec)
-				
+
 				-- Use warp back if enabled and moving towards return position
 				if Menu.WarpBack then
 					local velocity = pLocal:EstimateAbsVelocity()
 					local speed = velocity:Length2D()
-					
+
 					-- Check if velocity is pointing towards return position
 					local toReturn = PeekReturnVec - localPos
 					toReturn.z = 0 -- ignore vertical
 					local velocityDir = Vector3(velocity.x, velocity.y, 0)
-					
+
 					local canWarp = false
 					if toReturn:Length() > 0 and velocityDir:Length() > 0 then
 						local dot = toReturn:Dot(velocityDir)
 						canWarp = dot > 0 -- positive dot means same direction
 					end
-					
+
 					if warp and not warp.IsWarping() and (warp.GetChargedTicks() or 0) > 0 and canWarp then
 						warp.TriggerWarp()
 					end
