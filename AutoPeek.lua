@@ -298,19 +298,34 @@ local function shouldHitEntity(entity)
     return true
 end
 
--- Function to handle forward collision with wall sliding
-local function handleForwardCollision(vel, wallTrace)
+-- Function to handle forward collision with wall sliding and direction correction
+local function handleForwardCollision(vel, wallTrace, originalDirection)
     local normal = wallTrace.plane
-    local angle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
+    local angle = math.deg(math.acos(math.abs(originalDirection:Dot(normal))))
 
-    -- Adjust velocity if angle is greater than forward collision angle
-    if angle > FORWARD_COLLISION_ANGLE then
+    -- If angle is 50+ degrees, redirect simulation parallel to wall
+    if angle >= 50 then
+        -- Calculate direction parallel to the wall surface
+        local dot = originalDirection:Dot(normal)
+        local newDirection = originalDirection - normal * dot
+        
+        -- Normalize the new direction
+        if newDirection:Length() > 0 then
+            newDirection = newDirection / newDirection:Length()
+            -- Return special flag to indicate simulation should restart
+            return wallTrace.endpos.x, wallTrace.endpos.y, vel, newDirection, true
+        end
+    end
+    
+    -- Normal wall sliding for angles < 50 degrees
+    local wallAngle = math.deg(math.acos(normal:Dot(UP_VECTOR)))
+    if wallAngle > FORWARD_COLLISION_ANGLE then
         -- The wall is steep, slide along it
         local dot = vel:Dot(normal)
         vel = vel - normal * dot
     end
 
-    return wallTrace.endpos.x, wallTrace.endpos.y, vel
+    return wallTrace.endpos.x, wallTrace.endpos.y, vel, nil, false
 end
 
 -- Function to handle ground collision
@@ -333,7 +348,7 @@ local function handleGroundCollision(vel, groundTrace)
     return groundTrace.endpos, onGround, vel
 end
 
--- Improved simulation function based on Auto Trickstab methods
+-- Improved simulation function with wall direction correction
 -- Returns the walkable distance actually simulated, final feet position, and path taken
 local function SimulateMovement(startPos, direction, maxDistance)
     if maxDistance <= 0 then
@@ -354,92 +369,125 @@ local function SimulateMovement(startPos, direction, maxDistance)
     local stepSize = pLocal:GetPropFloat("localdata", "m_flStepSize") or 18
     local flags = pLocal:GetPropInt("m_fFlags") or 0
     
-    -- Normalize direction and set to player's movement speed
-    local simulatedVelocity = (direction / dirLen) * MAX_SPEED
+    -- Current simulation direction (can be modified by wall hits)
+    local currentDirection = direction / dirLen -- normalized
+    local simulationAttempts = 0
+    local maxAttempts = 3 -- Prevent infinite loops
     
-    -- Initialize simulation state
-    local currentPos = startPos
-    local currentVel = simulatedVelocity
-    local onGround = (flags & 1) ~= 0 -- Check if initially on ground
-    local totalWalked = 0
-    local simulationPath = {startPos}
-    
-    -- Simulate movement tick by tick
-    for tick = 1, SIMULATION_TICKS do
-        -- Calculate next position
-        local nextPos = currentPos + currentVel * tickInterval
+    -- Main simulation loop with direction correction
+    while simulationAttempts < maxAttempts do
+        simulationAttempts = simulationAttempts + 1
         
-        -- Forward collision check (wall detection)
-        local wallTrace = engine.TraceHull(
-            currentPos + STEP_HEIGHT_VECTOR, 
-            nextPos + STEP_HEIGHT_VECTOR, 
-            PLAYER_HULL.Min, 
-            PLAYER_HULL.Max, 
-            MASK_PLAYERSOLID, 
-            shouldHitEntity
-        )
+        -- Normalize direction and set to player's movement speed
+        local simulatedVelocity = currentDirection * MAX_SPEED
         
-        if wallTrace.fraction < 1 then
-            if wallTrace.entity and wallTrace.entity:GetClass() == "CTFPlayer" then
-                -- Hit a player, stop simulation
+        -- Initialize simulation state
+        local currentPos = startPos
+        local currentVel = simulatedVelocity
+        local onGround = (flags & 1) ~= 0 -- Check if initially on ground
+        local totalWalked = 0
+        local simulationPath = {startPos}
+        local shouldRestart = false
+        
+        -- Simulate movement tick by tick
+        for tick = 1, SIMULATION_TICKS do
+            -- Calculate next position
+            local nextPos = currentPos + currentVel * tickInterval
+            
+            -- Forward collision check (wall detection)
+            local wallTrace = engine.TraceHull(
+                currentPos + STEP_HEIGHT_VECTOR, 
+                nextPos + STEP_HEIGHT_VECTOR, 
+                PLAYER_HULL.Min, 
+                PLAYER_HULL.Max, 
+                MASK_PLAYERSOLID, 
+                shouldHitEntity
+            )
+            
+            if wallTrace.fraction < 1 then
+                if wallTrace.entity and wallTrace.entity:GetClass() == "CTFPlayer" then
+                    -- Hit a player, stop simulation
+                    break
+                else
+                    -- Handle wall collision with potential direction change
+                    local newX, newY, newVel, newDirection, restart = handleForwardCollision(currentVel, wallTrace, currentDirection)
+                    
+                    if restart and newDirection then
+                        -- Wall hit at 50+ degrees - restart simulation with new direction
+                        currentDirection = newDirection
+                        shouldRestart = true
+                        break
+                    else
+                        -- Normal wall sliding
+                        nextPos.x, nextPos.y, currentVel = newX, newY, newVel
+                    end
+                end
+            end
+            
+            if shouldRestart then
                 break
+            end
+            
+            -- Ground collision check
+            local downStep = onGround and STEP_HEIGHT_VECTOR or Vector3(0, 0, 0)
+            local groundTrace = engine.TraceHull(
+                nextPos + STEP_HEIGHT_VECTOR, 
+                nextPos - downStep, 
+                PLAYER_HULL.Min, 
+                PLAYER_HULL.Max, 
+                MASK_PLAYERSOLID, 
+                shouldHitEntity
+            )
+            
+            if groundTrace.fraction < 1 then
+                nextPos, onGround, currentVel = handleGroundCollision(currentVel, groundTrace)
             else
-                -- Handle wall collision with sliding
-                nextPos.x, nextPos.y, currentVel = handleForwardCollision(currentVel, wallTrace)
+                -- No ground found
+                if onGround then
+                    -- We were on ground but now we're not - we're falling
+                    onGround = false
+                end
+                -- Check if we're falling too far (would fall off)
+                if groundTrace.fraction == 1.0 then
+                    -- No ground within step height, stop simulation
+                    break
+                end
             end
-        end
-        
-        -- Ground collision check
-        local downStep = onGround and STEP_HEIGHT_VECTOR or Vector3(0, 0, 0)
-        local groundTrace = engine.TraceHull(
-            nextPos + STEP_HEIGHT_VECTOR, 
-            nextPos - downStep, 
-            PLAYER_HULL.Min, 
-            PLAYER_HULL.Max, 
-            MASK_PLAYERSOLID, 
-            shouldHitEntity
-        )
-        
-        if groundTrace.fraction < 1 then
-            nextPos, onGround, currentVel = handleGroundCollision(currentVel, groundTrace)
-        else
-            -- No ground found
-            if onGround then
-                -- We were on ground but now we're not - we're falling
-                onGround = false
+            
+            -- Apply gravity if not on ground
+            if not onGround then
+                currentVel.z = currentVel.z - gravity
             end
-            -- Check if we're falling too far (would fall off)
-            if groundTrace.fraction == 1.0 then
-                -- No ground within step height, stop simulation
+            
+            -- Calculate distance walked this tick
+            local stepDistance = (nextPos - currentPos):Length()
+            totalWalked = totalWalked + stepDistance
+            
+            -- Update position
+            currentPos = nextPos
+            table.insert(simulationPath, currentPos)
+            
+            -- Check if we've reached our maximum distance
+            if totalWalked >= maxDistance then
+                break
+            end
+            
+            -- Check if we've stopped moving (stuck)
+            if stepDistance < 1 then
                 break
             end
         end
         
-        -- Apply gravity if not on ground
-        if not onGround then
-            currentVel.z = currentVel.z - gravity
+        -- If we didn't need to restart, return the results
+        if not shouldRestart then
+            return totalWalked, currentPos, simulationPath
         end
         
-        -- Calculate distance walked this tick
-        local stepDistance = (nextPos - currentPos):Length()
-        totalWalked = totalWalked + stepDistance
-        
-        -- Update position
-        currentPos = nextPos
-        table.insert(simulationPath, currentPos)
-        
-        -- Check if we've reached our maximum distance
-        if totalWalked >= maxDistance then
-            break
-        end
-        
-        -- Check if we've stopped moving (stuck)
-        if stepDistance < 1 then
-            break
-        end
+        -- Continue loop with new direction if restarting
     end
     
-    return totalWalked, currentPos, simulationPath
+    -- If we exhausted all attempts, return what we have
+    return 0, startPos, {startPos}
 end
 
 
