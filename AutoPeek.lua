@@ -23,12 +23,12 @@ local Menu = {
 	Enabled = true,
 	Key = KEY_LSHIFT, -- Hold this key to start peeking
 	PeekAssist = true, -- Enables peek assist (smart mode). Disable for manual return
-	PeekTicks = 33, -- Max peek ticks (10-132)
-	Iterations = 7, -- Binary-search refinement passes
+	PeekTicks = 33,   -- Max peek ticks (10-132)
+	Iterations = 7,   -- Binary-search refinement passes
 	WarpBack = false, -- Warp back instantly instead of walking
 	InstantStop = false, -- Enable instant stop on shooting
 
-	TargetLimit = 3, -- Max players considered per tick
+	TargetLimit = 3,  -- Max players considered per tick
 
 	-- Target hitboxes
 	TargetHitboxes = { true, false, false, false, false, true }, -- Defaults: HEAD on, others off
@@ -301,7 +301,7 @@ local function shouldHitEntity(entity)
 	local pLocal = entities.GetLocalPlayer()
 	if not pLocal then return true end
 
-	if entity:GetName() == pLocal:GetName() then return false end             -- ignore self
+	if entity:GetName() == pLocal:GetName() then return false end          -- ignore self
 	if entity:GetTeamNumber() == pLocal:GetTeamNumber() then return false end -- ignore teammates
 
 	return true
@@ -384,7 +384,7 @@ local function SimulateMovement(startPos, direction, maxTicks)
 	-- Current simulation direction (can be modified by wall hits)
 	local currentDirection = direction / dirLen -- normalized
 	local simulationAttempts = 0
-	local maxAttempts = 3                       -- Prevent infinite loops
+	local maxAttempts = 3                    -- Prevent infinite loops
 
 	-- Main simulation loop with direction correction
 	while simulationAttempts < maxAttempts do
@@ -549,24 +549,32 @@ local function HasValidWeapon(pLocal)
 	return pWeapon and not pWeapon:IsMeleeWeapon()
 end
 
+-- Optimized yaw-only FOV calculation (ignores pitch for better performance)
+local function GetYawFOV(fromPos, toPos, viewYaw)
+	local dx = toPos.x - fromPos.x
+	local dy = toPos.y - fromPos.y
+	
+	-- Calculate target yaw angle
+	local targetYaw = math.deg(math.atan(dy, dx))
+	
+	-- Calculate yaw difference
+	local yawDiff = targetYaw - viewYaw
+	
+	-- Normalize to [-180, 180]
+	while yawDiff > 180 do yawDiff = yawDiff - 360 end
+	while yawDiff < -180 do yawDiff = yawDiff + 360 end
+	
+	-- Return absolute difference
+	return math.abs(yawDiff)
+end
+
 -- Function to calculate view position for target players (same as local player calculation)
 local function GetPlayerViewPos(player)
-	if not player or not player:IsValid() then
-		return nil
-	end
-
 	-- Get player's origin (feet position)
 	local playerOrigin = player:GetAbsOrigin()
-	if not playerOrigin then
-		return nil
-	end
 
 	-- Get player's view offset (same calculation as local player)
-	local viewOffset = player:GetPropVector("localdata", "m_vecViewOffset[0]")
-	if not viewOffset then
-		-- Fallback to default view offset if property not available
-		viewOffset = Vector3(0, 0, 64) -- Default TF2 view height
-	end
+	local viewOffset = player:GetPropVector("localdata", "m_vecViewOffset[0]") or Vector3(0, 0, 64) -- Default TF2 view height
 
 	-- Calculate view position (origin + view offset)
 	return playerOrigin + viewOffset
@@ -579,7 +587,7 @@ local function GetHitboxPos(entity, hitbox)
 	end
 
 	-- Normal hitbox handling
-	local hitbox = entity:GetHitboxes()[hitbox]
+	hitbox = entity:GetHitboxes()[hitbox]
 	if not hitbox then
 		return
 	end
@@ -589,12 +597,6 @@ end
 
 -- Populate target candidates once per tick -----------------------------
 local function UpdateTargetCandidates(pLocal, pPos)
-	local currentTick = globals.TickCount()
-	if CandidatesUpdateTick == currentTick then
-		return -- Already updated this tick
-	end
-	CandidatesUpdateTick = currentTick
-
 	-- Clear previous candidates
 	TargetCandidates = {}
 
@@ -608,40 +610,32 @@ local function UpdateTargetCandidates(pLocal, pPos)
 	local candidates = {}
 	local players = entities.FindByClass("CTFPlayer")
 	for _, vPlayer in pairs(players) do
-		if not vPlayer:IsValid() or not vPlayer:IsAlive() then goto continue end
+		if not vPlayer:IsAlive() then goto continue end
 		if vPlayer:GetTeamNumber() == pLocal:GetTeamNumber() then goto continue end
 
 		local playerInfo = client.GetPlayerInfo(vPlayer:GetIndex())
 		if steam.IsFriend(playerInfo.SteamID) and ignoreFriends == 1 then goto continue end
 
+		-- Screen culling optimization - skip players not on screen
+		local playerPos = vPlayer:GetAbsOrigin()
+		if not playerPos then goto continue end
+		local screenPos = client.WorldToScreen(playerPos)
+		if not screenPos then goto continue end -- Player is off-screen, skip entirely
+
 		-- Get head position for FOV metric
 		local headPos = GetHitboxPos(vPlayer, Hitboxes.HEAD)
 		if not headPos then goto continue end
 
-		-- Compute FOV using lnxLib if available
-		local fovDeg
-		if Math then
-			local targetAngles = Math.PositionAngles(pPos, headPos)
-			fovDeg = Math.AngleFov(viewAngles, targetAngles)
-		else
-			-- Fallback manual dot computation
-			local toTarget = headPos - pPos
-			local dist = toTarget:Length()
-			if dist == 0 then goto continue end
-			local dir = toTarget / dist
-			local dot = math.max(-1, math.min(1, forwardDir:Dot(dir)))
-			fovDeg = math.deg(math.acos(dot))
+		-- Compute yaw-only FOV (optimized for peeking)
+		local fovDeg = GetYawFOV(pPos, headPos, viewAngles.y)
+		local metric = fovDeg
+
+		-- Priority bonus (lower metric = higher priority)
+		local classId = vPlayer:GetPropInt("m_iClass") or 0
+		if classId == 2 or classId == 8 then -- Sniper or Spy	
+			metric = fovDeg - 50 -- Higher priority for dangerous classes
 		end
 
-		-- Priority bonus
-		local classId = vPlayer:GetPropInt("m_iClass") or 0
-		local bonus = 0
-		if classId == 2 then -- Sniper
-			bonus = 100
-		elseif classId == 8 then -- Spy
-			bonus = 50
-		end
-		local metric = fovDeg - bonus
 		table.insert(candidates, { player = vPlayer, metric = metric })
 
 		::continue::
@@ -664,7 +658,7 @@ local function CanAttackFromPos(pLocal, pPos)
 			if enabled then
 				local name = Menu.HitboxOptions[i]
 				local hitboxPos = GetHitboxPos(vPlayer, Hitboxes[name])
-				if hitboxPos and VisPos(vPlayer, pPos, hitboxPos) then
+				if VisPos(vPlayer, pPos, hitboxPos) then
 					return true
 				end
 			end
@@ -844,133 +838,133 @@ local function OnCreateMove(pCmd)
 			-- Only run binary search if we can shoot
 			if CanShoot(pLocal) then
 				-- SMART BINARY SEARCH -----------------------------
-			local function addVisual(testFeet, sees, simulationPath)
-				-- Draw the actual simulated path step by step
-				if simulationPath and #simulationPath > 1 then
-					for i = 1, #simulationPath - 1 do
-						DrawLine(simulationPath[i], simulationPath[i + 1])
+				local function addVisual(testFeet, sees, simulationPath)
+					-- Draw the actual simulated path step by step
+					if simulationPath and #simulationPath > 1 then
+						for i = 1, #simulationPath - 1 do
+							DrawLine(simulationPath[i], simulationPath[i + 1])
+						end
 					end
+
+					-- Draw perpendicular cross at final position
+					local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
+					local dirLen = CurrentPeekBasisDir:Length()
+					local basis = (dirLen > 0) and (CurrentPeekBasisDir / dirLen) or Vector3(1, 0, 0)
+					local perp = Vector3(-basis.y, basis.x, 0)
+					local crossStart = groundPos + (perp * 5)
+					local crossEnd = groundPos - (perp * 5)
+					table.insert(CrossDrawList, { start = crossStart, endPos = crossEnd, sees = sees })
 				end
 
-				-- Draw perpendicular cross at final position
-				local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
-				local dirLen = CurrentPeekBasisDir:Length()
-				local basis = (dirLen > 0) and (CurrentPeekBasisDir / dirLen) or Vector3(1, 0, 0)
-				local perp = Vector3(-basis.y, basis.x, 0)
-				local crossStart = groundPos + (perp * 5)
-				local crossEnd = groundPos - (perp * 5)
-				table.insert(CrossDrawList, { start = crossStart, endPos = crossEnd, sees = sees })
-			end
+				-- Predeclare variables to avoid scope issues with goto
+				-- NOTE: ALL variables used after any 'goto after_search' MUST be predeclared here
+				-- to prevent "jumps into scope of local" errors
+				local farPos, farVisible, farFeet, farEye, farPath
+				local hullTrace, maxRatio, effectiveDir
+				local currentPos, remainingDir, totalDistance, maxDistance
+				local low, high, bestPos, bestFeet
+				local found = false
+				local requestedDistance, walkableDistance, simEndPos, startPath
+				local best_dist, best_ticks
+				local ignored_dist
+				local tick_floor, tick_ceil, fractional_part
 
-			-- Predeclare variables to avoid scope issues with goto
-			-- NOTE: ALL variables used after any 'goto after_search' MUST be predeclared here
-			-- to prevent "jumps into scope of local" errors
-			local farPos, farVisible, farFeet, farEye, farPath
-			local hullTrace, maxRatio, effectiveDir
-			local currentPos, remainingDir, totalDistance, maxDistance
-			local low, high, bestPos, bestFeet
-			local found = false
-			local requestedDistance, walkableDistance, simEndPos, startPath
-			local best_dist, best_ticks
-			local ignored_dist
-			local tick_floor, tick_ceil, fractional_part
-
-			local startEye = PeekStartFeet + viewOffset
-			local startVisible = CanAttackFromPos(pLocal, startEye)
-			if startVisible then
-				CurrentBestPos = startEye
-				addVisual(PeekStartFeet, true, { PeekStartFeet })
-				found = true
-				bestFeet = PeekStartFeet
-				bestPos = startEye
-				goto after_search
-			end
-
-			walkableDistance, farFeet, farPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, Menu.PeekTicks)
-
-			if walkableDistance > 0 then
-				CurrentPeekBasisDir = farFeet - PeekStartFeet
-				CurrentPeekBasisDir.z = 0
-				-- fallback if zero
-				if CurrentPeekBasisDir:Length() == 0 then
-					CurrentPeekBasisDir = OriginalPeekDirection
+				local startEye = PeekStartFeet + viewOffset
+				local startVisible = CanAttackFromPos(pLocal, startEye)
+				if startVisible then
+					CurrentBestPos = startEye
+					addVisual(PeekStartFeet, true, { PeekStartFeet })
+					found = true
+					bestFeet = PeekStartFeet
+					bestPos = startEye
+					goto after_search
 				end
-				CurrentPeekBasisDir = CurrentPeekBasisDir / CurrentPeekBasisDir:Length()
 
-				farEye = farFeet + viewOffset
-				farVisible = CanAttackFromPos(pLocal, farEye)
-				addVisual(farFeet, farVisible, farPath)
-				if not farVisible then
+				walkableDistance, farFeet, farPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, Menu.PeekTicks)
+
+				if walkableDistance > 0 then
+					CurrentPeekBasisDir = farFeet - PeekStartFeet
+					CurrentPeekBasisDir.z = 0
+					-- fallback if zero
+					if CurrentPeekBasisDir:Length() == 0 then
+						CurrentPeekBasisDir = OriginalPeekDirection
+					end
+					CurrentPeekBasisDir = CurrentPeekBasisDir / CurrentPeekBasisDir:Length()
+
+					farEye = farFeet + viewOffset
+					farVisible = CanAttackFromPos(pLocal, farEye)
+					addVisual(farFeet, farVisible, farPath)
+					if not farVisible then
+						IsReturning = true
+						CurrentBestPos = nil
+						goto after_search
+					end
+				else
 					IsReturning = true
 					CurrentBestPos = nil
 					goto after_search
 				end
-			else
-				IsReturning = true
-				CurrentBestPos = nil
-				goto after_search
-			end
 
-			low = 0.0      -- invisible (fractional tick count)
-			high = Menu.PeekTicks * 1.0 -- visible (fractional tick count)
-			found = true
+				low = 0.0      -- invisible (fractional tick count)
+				high = Menu.PeekTicks * 1.0 -- visible (fractional tick count)
+				found = true
 
-			for i = 1, Menu.Iterations do
-				local mid_ticks = (low + high) * 0.5  -- fractional ticks
-				tick_floor = math.floor(mid_ticks)
-				tick_ceil = math.ceil(mid_ticks)
-				fractional_part = mid_ticks - tick_floor
+				for i = 1, Menu.Iterations do
+					local mid_ticks = (low + high) * 0.5 -- fractional ticks
+					tick_floor = math.floor(mid_ticks)
+					tick_ceil = math.ceil(mid_ticks)
+					fractional_part = mid_ticks - tick_floor
 
-				local testFeet, testPath
+					local testFeet, testPath
+					if tick_floor == tick_ceil or fractional_part < 0.001 then
+						-- Integer tick or very close to integer, simulate normally
+						ignored_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+					else
+						-- Fractional tick, interpolate between floor and ceil positions
+						local _, feetFloor, pathFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+						local _, feetCeil, pathCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
+
+						-- Interpolate between the two positions
+						testFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
+						testPath = pathFloor -- Use the floor path for visualization
+					end
+
+					local testEye = testFeet + viewOffset
+					local vis = CanAttackFromPos(pLocal, testEye)
+					addVisual(testFeet, vis, testPath)
+
+					if vis then
+						high = mid_ticks
+					else
+						low = mid_ticks
+					end
+				end
+
+				-- After loop, compute best at converged high
+				best_ticks = high
+				tick_floor = math.floor(best_ticks)
+				tick_ceil = math.ceil(best_ticks)
+				fractional_part = best_ticks - tick_floor
+
 				if tick_floor == tick_ceil or fractional_part < 0.001 then
-					-- Integer tick or very close to integer, simulate normally
-					ignored_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+					ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
 				else
-					-- Fractional tick, interpolate between floor and ceil positions
-					local _, feetFloor, pathFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
-					local _, feetCeil, pathCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
-					
-					-- Interpolate between the two positions
-					testFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
-					testPath = pathFloor  -- Use the floor path for visualization
+					local _, feetFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
+					local _, feetCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
+					bestFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
 				end
+				bestPos = bestFeet + viewOffset
 
-				local testEye = testFeet + viewOffset
-				local vis = CanAttackFromPos(pLocal, testEye)
-				addVisual(testFeet, vis, testPath)
-
-				if vis then
-					high = mid_ticks
+				::after_search::
+				if bestFeet and found then
+					WalkTo(pCmd, pLocal, bestFeet)
+					CurrentBestPos = bestPos -- eye for other uses if needed
+					CurrentBestFeet = bestFeet -- add this for drawing
 				else
-					low = mid_ticks
+					IsReturning = true
+					CurrentBestPos = nil
+					CurrentBestFeet = nil
 				end
-			end
-
-			-- After loop, compute best at converged high
-			best_ticks = high
-			tick_floor = math.floor(best_ticks)
-			tick_ceil = math.ceil(best_ticks)
-			fractional_part = best_ticks - tick_floor
-			
-			if tick_floor == tick_ceil or fractional_part < 0.001 then
-				ignored_dist, bestFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
-			else
-				local _, feetFloor = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_floor)
-				local _, feetCeil = SimulateMovement(PeekStartFeet, PeekDirectionVec, tick_ceil)
-				bestFeet = feetFloor + (feetCeil - feetFloor) * fractional_part
-			end
-			bestPos = bestFeet + viewOffset
-
-			::after_search::
-			if bestFeet and found then
-				WalkTo(pCmd, pLocal, bestFeet)
-				CurrentBestPos = bestPos -- eye for other uses if needed
-				CurrentBestFeet = bestFeet -- add this for drawing
-			else
-				IsReturning = true
-				CurrentBestPos = nil
-				CurrentBestFeet = nil
-			end
 			end -- End of CanShoot check
 		end
 
@@ -1123,11 +1117,11 @@ local function OnCreateMove(pCmd)
 		CrossDrawList = {}
 		ShotThisTick = false
 		NeedsCyoaClose = false
-		
+
 		-- Reset candidates to avoid stale data
 		TargetCandidates = {}
 		CandidatesUpdateTick = -1
-		
+
 		if Menu.WarpBack and warp then warp.TriggerCharge() end --remember this is hwo you recharge api is literaly this dont cahnge it
 	end
 end
