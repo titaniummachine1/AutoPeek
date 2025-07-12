@@ -23,15 +23,15 @@ local Menu = {
 	Enabled = true,
 	Key = KEY_LSHIFT,  -- Hold this key to start peeking
 	PeekAssist = true, -- Enables peek assist (smart mode). Disable for manual return
-	PeekTicks = 66,    -- Max peek ticks (10-132)
+	PeekTicks = 33,    -- Max peek ticks (10-132)
 	Iterations = 7,    -- Binary-search refinement passes
-	WarpBack = true,   -- Warp back instantly instead of walking
+	WarpBack = false,   -- Warp back instantly instead of walking
 
 	TargetLimit = 3,   -- Max players considered per tick
 
 	-- Target hitboxes
-	TargetHitboxes = { true, false, false, false, false }, -- Defaults: HEAD on, others off
-	HitboxOptions = { "HEAD", "NECK", "PELVIS", "BODY", "CHEST" },
+	TargetHitboxes = { true, false, false, false, false, false }, -- Defaults: HEAD on, others off
+	HitboxOptions = { "HEAD", "NECK", "PELVIS", "BODY", "CHEST", "VIEWPOS" },
 
 	-- Visuals
 	Visuals = {
@@ -155,9 +155,9 @@ local function SafeInitMenu()
 
 	-- Initialize TargetHitboxes as boolean array
 	if Menu.TargetHitboxes == nil then
-		Menu.TargetHitboxes = { true, false, false, false, false }
+		Menu.TargetHitboxes = { true, false, false, false, false, false }
 	end
-	Menu.HitboxOptions = { "HEAD", "NECK", "PELVIS", "BODY", "CHEST" }
+	Menu.HitboxOptions = { "HEAD", "NECK", "PELVIS", "BODY", "CHEST", "VIEWPOS" }
 
 	-- Initialize Visuals settings
 	Menu.Visuals = Menu.Visuals or {}
@@ -268,7 +268,7 @@ local PlayerHullMaxs = Vector3(24, 24, 82)
 local STEP_HEIGHT = 18
 local MAX_SPEED = 300        -- or use player's max speed
 local TICK_INTERVAL = globals.TickInterval() or (1 / 66.67)
-local SLIDE_ANGLE_LIMIT = 50 -- degrees; if angle diff > this, stop instead of slide
+local SLIDE_ANGLE_LIMIT = 60 -- degrees; if angle diff > this, stop instead of slide
 
 -- Constants for simulation (based on Auto Trickstab methods)
 local SIMULATION_TICKS = 23
@@ -504,6 +504,7 @@ local Hitboxes = {
 	PELVIS = 4,
 	BODY = 5,
 	CHEST = 7,
+	VIEWPOS = 999, -- Special case - calculated view position
 }
 
 local function OnGround(player)
@@ -532,7 +533,36 @@ local function CanShoot(pLocal)
 	return (nextPrimaryAttack <= globals.CurTime()) and (nextAttack <= globals.CurTime())
 end
 
+-- Function to calculate view position for target players (same as local player calculation)
+local function GetPlayerViewPos(player)
+	if not player or not player:IsValid() then
+		return nil
+	end
+	
+	-- Get player's origin (feet position)
+	local playerOrigin = player:GetAbsOrigin()
+	if not playerOrigin then
+		return nil
+	end
+	
+	-- Get player's view offset (same calculation as local player)
+	local viewOffset = player:GetPropVector("localdata", "m_vecViewOffset[0]")
+	if not viewOffset then
+		-- Fallback to default view offset if property not available
+		viewOffset = Vector3(0, 0, 64) -- Default TF2 view height
+	end
+	
+	-- Calculate view position (origin + view offset)
+	return playerOrigin + viewOffset
+end
+
 local function GetHitboxPos(entity, hitbox)
+	-- Special case for VIEWPOS - calculate view position instead of using hitbox
+	if hitbox == Hitboxes.VIEWPOS then
+		return GetPlayerViewPos(entity)
+	end
+	
+	-- Normal hitbox handling
 	local hitbox = entity:GetHitboxes()[hitbox]
 	if not hitbox then
 		return
