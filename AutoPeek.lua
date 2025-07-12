@@ -271,15 +271,15 @@ local TICK_INTERVAL = globals.TickInterval() or (1 / 66.67)
 local SLIDE_ANGLE_LIMIT = 50 -- degrees; if angle diff > this, stop instead of slide
 
 -- Step-by-step movement simulation with wall sliding handled during simulation
--- Returns the walkable distance actually simulated and final feet position
+-- Returns the walkable distance actually simulated, final feet position, and path taken
 local function SimulateMovement(startPos, direction, maxDistance)
 	if maxDistance <= 0 then
-		return 0, startPos
+		return 0, startPos, {startPos}
 	end
 
 	local dirLen = direction:Length()
 	if dirLen == 0 then
-		return 0, startPos
+		return 0, startPos, {startPos}
 	end
 	local stepDir = direction / dirLen -- normalized
 
@@ -289,6 +289,9 @@ local function SimulateMovement(startPos, direction, maxDistance)
 	if stepSize <= 0 then
 		stepSize = 8                           -- sensible fallback
 	end
+
+	-- Store the path taken during simulation
+	local simulationPath = {startPos}
 
 	while walked < maxDistance do
 		local remaining = maxDistance - walked
@@ -310,7 +313,12 @@ local function SimulateMovement(startPos, direction, maxDistance)
 				-- Shallow hit - slide along wall by adjusting direction
 				local dot = stepDir:Dot(wallNormal)
 				stepDir = stepDir - (wallNormal * dot)
-				stepDir = stepDir / stepDir:Length()
+				local stepDirLen = stepDir:Length()
+				if stepDirLen == 0 then
+					-- Can't slide, stop
+					break
+				end
+				stepDir = stepDir / stepDirLen
 
 				-- Retry with new direction
 				forwardEnd = stepUpPos + stepDir * moveDist
@@ -330,17 +338,29 @@ local function SimulateMovement(startPos, direction, maxDistance)
 		local dropStart = fwdTrace.endpos
 		local dropEnd = dropStart - Vector3(0, 0, STEP_HEIGHT + 1)
 		local dropTrace = engine.TraceHull(dropStart, dropEnd, PlayerHullMins, PlayerHullMaxs, MASK_PLAYERSOLID)
+		
+		-- Check if we would fall (no ground found within step height)
 		if dropTrace.fraction >= 1.0 then
-			-- No ground within step height => would fall; abort
+			-- No ground within step height => would fall; abort simulation
+			break
+		end
+
+		-- Check if we're falling too far (more than step height means we're falling off something)
+		local fallDistance = (dropStart - dropTrace.endpos):Length()
+		if fallDistance > STEP_HEIGHT then
+			-- We're falling more than a step, stop simulation
 			break
 		end
 
 		-- Update position on ground and distance walked
 		currentPos = dropTrace.endpos
 		walked = walked + moveDist
+		
+		-- Add this position to our simulation path
+		table.insert(simulationPath, currentPos)
 	end
 
-	return walked, currentPos
+	return walked, currentPos, simulationPath
 end
 
 
@@ -594,9 +614,16 @@ local function OnCreateMove(pCmd)
 			PeekDirectionVec.z = 0
 
 			-- SMART BINARY SEARCH -----------------------------
-			local function addVisual(testFeet, sees)
+			local function addVisual(testFeet, sees, simulationPath)
+				-- Draw the actual simulated path step by step
+				if simulationPath and #simulationPath > 1 then
+					for i = 1, #simulationPath - 1 do
+						DrawLine(simulationPath[i], simulationPath[i + 1])
+					end
+				end
+				
+				-- Draw perpendicular cross at final position
 				local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
-				DrawLine(PeekReturnVec, groundPos)
 				local dirLen = CurrentPeekBasisDir:Length()
 				local basis = (dirLen > 0) and (CurrentPeekBasisDir / dirLen) or Vector3(1, 0, 0)
 				local perp = Vector3(-basis.y, basis.x, 0)
@@ -608,12 +635,12 @@ local function OnCreateMove(pCmd)
 			-- Predeclare variables to avoid scope issues with goto
 			-- NOTE: ALL variables used after any 'goto after_search' MUST be predeclared here
 			-- to prevent "jumps into scope of local" errors
-			local farPos, farVisible, farFeet, farEye
+			local farPos, farVisible, farFeet, farEye, farPath
 			local hullTrace, maxRatio, effectiveDir
 			local currentPos, remainingDir, totalDistance, maxDistance
 			local low, high, bestPos, bestFeet
 			local found = false
-			local requestedDistance, walkableDistance, simEndPos
+			local requestedDistance, walkableDistance, simEndPos, startPath
 			local best_dist
 			local ignored_dist
 
@@ -621,7 +648,7 @@ local function OnCreateMove(pCmd)
 			local startVisible = CanAttackFromPos(pLocal, startEye)
 			if startVisible then
 				CurrentBestPos = startEye
-				addVisual(PeekStartFeet, true)
+				addVisual(PeekStartFeet, true, {PeekStartFeet})
 				found = true
 				bestFeet = PeekStartFeet
 				bestPos = startEye
@@ -629,7 +656,7 @@ local function OnCreateMove(pCmd)
 			end
 
 			requestedDistance = PeekDirectionVec:Length()
-			walkableDistance, farFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, requestedDistance)
+			walkableDistance, farFeet, farPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, requestedDistance)
 
 			if walkableDistance > 0 then
 				CurrentPeekBasisDir = farFeet - PeekStartFeet
@@ -642,7 +669,7 @@ local function OnCreateMove(pCmd)
 
 				farEye = farFeet + viewOffset
 				farVisible = CanAttackFromPos(pLocal, farEye)
-				addVisual(farFeet, farVisible)
+				addVisual(farFeet, farVisible, farPath)
 				if not farVisible then
 					IsReturning = true
 					CurrentBestPos = nil
@@ -660,10 +687,10 @@ local function OnCreateMove(pCmd)
 
 			for i = 1, Menu.Iterations do
 				local mid_dist = (low + high) * 0.5
-				local test_dist, testFeet = SimulateMovement(PeekStartFeet, PeekDirectionVec, mid_dist)
+				local test_dist, testFeet, testPath = SimulateMovement(PeekStartFeet, PeekDirectionVec, mid_dist)
 				local testEye = testFeet + viewOffset
 				local vis = CanAttackFromPos(pLocal, testEye)
-				addVisual(testFeet, vis)
+				addVisual(testFeet, vis, testPath)
 
 				if vis then
 					high = mid_dist
