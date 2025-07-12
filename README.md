@@ -8,7 +8,9 @@
 
 ---
 
-![AutoPeek Showcase](https://github.com/user-attachments/assets/5361d5e6-9f30-4390-9ef9-ed83f2d66f8e)
+<img width="444" height="686" alt="image" src="https://github.com/user-attachments/assets/ef8d8085-6d36-474c-83b8-209c31a6bd86" />
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/8d101539-13ef-4a13-a4b5-8e6c3fe1a45b" />
 
 ---
 
