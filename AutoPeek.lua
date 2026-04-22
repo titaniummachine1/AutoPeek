@@ -1119,15 +1119,9 @@ end
 -- 3. HEAD hitbox priority: Checks HEAD first (most common target) for faster early exit
 -- 4. Null checks: Added hitboxPos validation to prevent unnecessary VisPos calls
 -- Expected performance improvement: 70-80% reduction in traceLine calls during binary search
-local function CanAttackFromPos(pLocal, pPos, binarySearchMode)
-	-- During binary search, only check the top candidate to reduce load
-	local candidatesToCheck = TargetCandidates
-	if binarySearchMode and #TargetCandidates > 1 then
-		candidatesToCheck = { TargetCandidates[1] } -- Only check the highest priority target
-	end
-
-	-- Check visibility against pre-selected candidates
-	for _, cand in ipairs(candidatesToCheck) do
+local function CanAttackFromPos(pLocal, pPos)
+	-- Check visibility against all pre-selected candidates
+	for _, cand in pairs(TargetCandidates) do
 		local vPlayer = cand.player
 
 		-- Priority order: HEAD, VIEWPOS, then rest
@@ -1305,9 +1299,8 @@ local function OnCreateMove(pCmd)
 				return -- Don't peek without valid weapon
 			end
 
-			if true then
-				LineDrawList = {}
-				CrossDrawList = {}
+			LineDrawList = {}
+			CrossDrawList = {}
 
 				-- Anchor (PeekStartVec) remains constant – do not overwrite each tick
 				-- Recompute direction vector each tick based on current view yaw (unless frozen)
@@ -1356,7 +1349,7 @@ local function OnCreateMove(pCmd)
 					local simStartPos, simDirection, simMaxTicks
 
 					local startEye = PeekStartFeet + viewOffset
-					local startVisible = CanAttackFromPos(pLocal, startEye, false) -- Not binary search mode
+					local startVisible = CanAttackFromPos(pLocal, startEye)
 					if startVisible then
 						CurrentBestPos = startEye
 						addVisual(PeekStartFeet, true, { PeekStartFeet })
@@ -1394,7 +1387,7 @@ local function OnCreateMove(pCmd)
 						CurrentPeekBasisDir = CurrentPeekBasisDir / CurrentPeekBasisDir:Length()
 
 						farEye = farFeet + viewOffset
-						farVisible = CanAttackFromPos(pLocal, farEye, false) -- Not binary search mode
+						farVisible = CanAttackFromPos(pLocal, farEye)
 						addVisual(farFeet, farVisible, cachedPath)
 						if not farVisible then
 							IsReturning = true
@@ -1433,7 +1426,7 @@ local function OnCreateMove(pCmd)
 						end
 
 						local testEye = testFeet + viewOffset
-						local vis = CanAttackFromPos(pLocal, testEye, true) -- Binary search mode - only check top candidate
+						local vis = CanAttackFromPos(pLocal, testEye)
 						addVisual(testFeet, vis, cachedPath)
 
 						if vis then
@@ -1464,7 +1457,6 @@ local function OnCreateMove(pCmd)
 						CurrentBestFeet = nil
 					end
 				end -- End of CanShoot check
-			end
 		end
 
 		if IsReturning == true then
