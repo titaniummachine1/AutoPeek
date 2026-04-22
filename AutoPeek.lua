@@ -255,6 +255,15 @@ SafeInitMenu()
 
 local PosPlaced = false -- Did we start peeking?
 local IsReturning = false -- Are we returning?
+local IsWaitingForRecharge = false -- Are we parked at the return point waiting for warp to refill?
+local PendingUnzoomRelease = false -- Do we need to release attack2 after forcing an unzoom?
+local IsAwaitingUnzoom = false -- Have we requested unzoom and are waiting one tick for command registration?
+local PendingZoomInRelease = false -- Do we need to release attack2 after forcing zoom-in?
+local IsAwaitingZoomIn = false -- Have we requested zoom-in and are waiting for scope state?
+local HasShotSincePeekStart = false -- Have we fired at least once during the current peek cycle?
+local AwaitingShotConfirmation = false -- Are we waiting for ammo decrease to confirm a fired shot?
+local ShotConfirmedForReturn = false -- Was a shot confirmed for this return cycle?
+local PrevShotAmmoSnapshot = nil -- Previous tick ammo snapshot for shot confirmation
 local HasDirection = false -- Do we have a peek direction?
 local PeekStartVec = Vector3(0, 0, 0)
 local PeekDirectionVec = Vector3(0, 0, 0)
@@ -816,6 +825,108 @@ local function HasValidWeapon(pLocal)
 	return pWeapon and not pWeapon:IsMeleeWeapon()
 end
 
+local function IsWarpReadyForPeek(pLocal)
+	if Menu.WarpBack == false then
+		return true
+	end
+
+	if warp == nil then
+		return true
+	end
+
+	assert(pLocal ~= nil, "IsWarpReadyForPeek: pLocal missing")
+
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if pWeapon == nil then
+		return false
+	end
+
+	return warp.CanDoubleTap(pWeapon)
+end
+
+local function IsPlayerZoomed(pLocal)
+	assert(pLocal ~= nil, "IsPlayerZoomed: pLocal missing")
+
+	if pLocal:InCond(13) then
+		return true
+	end
+
+	local fov = pLocal:GetPropInt("m_iFOV")
+	if fov ~= nil and fov > 0 and fov < 85 then
+		return true
+	end
+
+	return false
+end
+
+local function GetShotAmmoSnapshot(pLocal)
+	assert(pLocal ~= nil, "GetShotAmmoSnapshot: pLocal missing")
+
+	local pWeapon = pLocal:GetPropEntity("m_hActiveWeapon")
+	if pWeapon == nil then
+		return nil
+	end
+
+	local clip1 = pWeapon:GetPropInt("LocalWeaponData", "m_iClip1")
+	local reserve = nil
+	local sniperReserve = nil
+	local classId = pLocal:GetPropInt("m_iClass") or 0
+	local isSniperClass = classId == 2
+	local ammoType = pWeapon:GetPropInt("m_iPrimaryAmmoType")
+	local ammoTable = pLocal:GetPropDataTableInt("localdata", "m_iAmmo")
+	if ammoTable ~= nil then
+		if isSniperClass then
+			sniperReserve = ammoTable[2]
+		end
+
+		if ammoType ~= nil and ammoType >= 0 then
+			reserve = ammoTable[ammoType + 1]
+		end
+	end
+
+	local defIndex = pWeapon:GetPropInt("m_iItemDefinitionIndex") or -1
+
+	return {
+		defIndex = defIndex,
+		isSniperClass = isSniperClass,
+		clip1 = clip1,
+		reserve = reserve,
+		sniperReserve = sniperReserve,
+	}
+end
+
+local function HasShotAmmoDecreased(previousSnapshot, currentSnapshot)
+	if previousSnapshot == nil or currentSnapshot == nil then
+		return false
+	end
+
+	if previousSnapshot.defIndex ~= currentSnapshot.defIndex then
+		return false
+	end
+
+	if previousSnapshot.isSniperClass and currentSnapshot.isSniperClass then
+		if previousSnapshot.sniperReserve ~= nil and currentSnapshot.sniperReserve ~= nil then
+			return currentSnapshot.sniperReserve < previousSnapshot.sniperReserve
+		end
+		return false
+	end
+
+	if
+		previousSnapshot.clip1 ~= nil
+		and currentSnapshot.clip1 ~= nil
+		and previousSnapshot.clip1 >= 0
+		and currentSnapshot.clip1 >= 0
+	then
+		return currentSnapshot.clip1 < previousSnapshot.clip1
+	end
+
+	if previousSnapshot.reserve ~= nil and currentSnapshot.reserve ~= nil then
+		return currentSnapshot.reserve < previousSnapshot.reserve
+	end
+
+	return false
+end
+
 -- FOV calculation using lnxLib Math functions
 local function GetFOV(fromPos, toPos, viewAngles)
 	-- Use lnxLib Math functions properly:
@@ -1117,6 +1228,7 @@ local function OnCreateMove(pCmd)
 
 	if pLocal:IsAlive() and isButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13)) then
 		local localPos = pLocal:GetAbsOrigin()
+		local didPressAttack = (pCmd:GetButtons() & IN_ATTACK) ~= 0
 
 		-- We just started peeking. Save the return position!
 		if PosPlaced == false then
@@ -1178,7 +1290,7 @@ local function OnCreateMove(pCmd)
 		end
 
 		-- Universal shooting detection for both modes
-		if (pCmd:GetButtons() & IN_ATTACK) ~= 0 then
+		if didPressAttack then
 			-- Trigger InstantStop on shoot tick (only if enabled)
 			if Menu.InstantStop and currentState == STATE_DEFAULT and isGrounded then
 				triggerFastStop() -- cyoa open 1
@@ -1187,170 +1299,172 @@ local function OnCreateMove(pCmd)
 		end
 
 		-- Should we peek?
-		if Menu.PeekAssist == true and HasDirection == true then
+		if Menu.PeekAssist == true and HasDirection == true and IsReturning == false then
 			-- Check if we have a valid weapon for peeking
 			if not HasValidWeapon(pLocal) then
 				return -- Don't peek without valid weapon
 			end
 
-			LineDrawList = {}
-			CrossDrawList = {}
+			if true then
+				LineDrawList = {}
+				CrossDrawList = {}
 
-			-- Anchor (PeekStartVec) remains constant – do not overwrite each tick
-			-- Recompute direction vector each tick based on current view yaw (unless frozen)
-			if not PredictionFrozen then
-				PeekDirectionVec = OriginalPeekDirection * (MAX_SPEED * TICK_INTERVAL * Menu.PeekTicks)
-				PeekDirectionVec.z = 0
-			end
-
-			-- Update target candidates once per tick (expensive operation)
-			UpdateTargetCandidates(pLocal, PeekStartFeet + viewOffset)
-
-			-- Check if we can shoot - if not, start returning
-			if not CanShoot(pLocal) then
-				IsReturning = true
-				CurrentBestPos = nil
-				CurrentBestFeet = nil
-			end
-
-			-- Only run binary search if we can shoot
-			if CanShoot(pLocal) then
-				-- OPTIMIZED BINARY SEARCH WITH CACHING -----------------------------
-				local function addVisual(testFeet, sees, simulationPath)
-					-- Draw the actual simulated path step by step
-					if simulationPath and #simulationPath > 1 then
-						for i = 1, #simulationPath - 1 do
-							DrawLine(simulationPath[i], simulationPath[i + 1])
-						end
-					end
-
-					-- Draw perpendicular cross at final position
-					local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
-					local dirLen = CurrentPeekBasisDir:Length()
-					local basis = (dirLen > 0) and (CurrentPeekBasisDir / dirLen) or Vector3(1, 0, 0)
-					local perp = Vector3(-basis.y, basis.x, 0)
-					local crossStart = groundPos + (perp * 5)
-					local crossEnd = groundPos - (perp * 5)
-					tableInsert(CrossDrawList, { start = crossStart, endPos = crossEnd, sees = sees })
+				-- Anchor (PeekStartVec) remains constant – do not overwrite each tick
+				-- Recompute direction vector each tick based on current view yaw (unless frozen)
+				if not PredictionFrozen then
+					PeekDirectionVec = OriginalPeekDirection * (MAX_SPEED * TICK_INTERVAL * Menu.PeekTicks)
+					PeekDirectionVec.z = 0
 				end
 
-				-- Predeclare variables to avoid scope issues with goto
-				local farPos, farVisible, farFeet, farEye, farPath
-				local low, high, bestPos, bestFeet
-				local found = false
-				local walkableDistance, cachedPath
-				local best_ticks
-				local simStartPos, simDirection, simMaxTicks
+				-- Update target candidates once per tick (expensive operation)
+				UpdateTargetCandidates(pLocal, PeekStartFeet + viewOffset)
 
-				local startEye = PeekStartFeet + viewOffset
-				local startVisible = CanAttackFromPos(pLocal, startEye, false) -- Not binary search mode
-				if startVisible then
-					CurrentBestPos = startEye
-					addVisual(PeekStartFeet, true, { PeekStartFeet })
-					found = true
-					bestFeet = PeekStartFeet
-					bestPos = startEye
-					goto after_search
-				end
-
-				-- Get cached simulation result (only computed once per frame)
-				if PredictionFrozen and FrozenSimulationResult then
-					-- Use frozen prediction
-					walkableDistance = FrozenSimulationResult.walkableDistance
-					farFeet = FrozenSimulationResult.endPos
-					cachedPath = FrozenSimulationResult.path
-					simStartPos = FrozenStartPos
-					simDirection = FrozenDirection
-					simMaxTicks = FrozenMaxTicks
-				else
-					-- Use current prediction
-					walkableDistance, farFeet, cachedPath =
-						GetCachedSimulation(PeekStartFeet, PeekDirectionVec, Menu.PeekTicks)
-					simStartPos = PeekStartFeet
-					simDirection = PeekDirectionVec
-					simMaxTicks = Menu.PeekTicks
-				end
-
-				if walkableDistance > 0 then
-					CurrentPeekBasisDir = farFeet - simStartPos
-					CurrentPeekBasisDir.z = 0
-					-- fallback if zero
-					if CurrentPeekBasisDir:Length() == 0 then
-						CurrentPeekBasisDir = OriginalPeekDirection
-					end
-					CurrentPeekBasisDir = CurrentPeekBasisDir / CurrentPeekBasisDir:Length()
-
-					farEye = farFeet + viewOffset
-					farVisible = CanAttackFromPos(pLocal, farEye, false) -- Not binary search mode
-					addVisual(farFeet, farVisible, cachedPath)
-					if not farVisible then
-						IsReturning = true
-						CurrentBestPos = nil
-						goto after_search
-					end
-				else
-					IsReturning = true
-					CurrentBestPos = nil
-					goto after_search
-				end
-
-				low = 0.0 -- invisible (fractional tick count)
-				high = simMaxTicks * 1.0 -- visible (fractional tick count)
-				found = true
-
-				-- Binary search using cached simulation path with linear interpolation
-				for i = 1, Menu.Iterations do
-					local mid_ticks = (low + high) * 0.5 -- fractional ticks
-
-					-- Early bailout if we've reached floating point precision limits
-					-- If the difference is smaller than what we can meaningfully distinguish,
-					-- continuing iterations won't improve accuracy
-					local precision_threshold = 0.0001 -- about 1/100th of a tick
-					if (high - low) < precision_threshold then
-						-- We've reached the limits of meaningful precision, bail out
-						break
-					end
-
-					-- Use linear interpolation on cached path
-					local testFeet = InterpolatePosition(cachedPath, mid_ticks)
-					if not testFeet then
-						-- Fallback if interpolation fails
-						low = mid_ticks
-						goto continue_search
-					end
-
-					local testEye = testFeet + viewOffset
-					local vis = CanAttackFromPos(pLocal, testEye, true) -- Binary search mode - only check top candidate
-					addVisual(testFeet, vis, cachedPath)
-
-					if vis then
-						high = mid_ticks
-					else
-						low = mid_ticks
-					end
-
-					::continue_search::
-				end
-
-				-- After loop, compute best at converged high
-				best_ticks = high
-				bestFeet = InterpolatePosition(cachedPath, best_ticks)
-				if bestFeet then
-					bestPos = bestFeet + viewOffset
-				end
-
-				::after_search::
-
-				if bestFeet and found then
-					WalkTo(pCmd, pLocal, bestFeet)
-					CurrentBestPos = bestPos -- eye for other uses if needed
-					CurrentBestFeet = bestFeet -- add this for drawing
-				else
+				-- Check if we can shoot - if not, start returning
+				if not CanShoot(pLocal) then
 					IsReturning = true
 					CurrentBestPos = nil
 					CurrentBestFeet = nil
 				end
-			end -- End of CanShoot check
+
+				-- Only run binary search if we can shoot
+				if CanShoot(pLocal) then
+					-- OPTIMIZED BINARY SEARCH WITH CACHING -----------------------------
+					local function addVisual(testFeet, sees, simulationPath)
+						-- Draw the actual simulated path step by step
+						if simulationPath and #simulationPath > 1 then
+							for i = 1, #simulationPath - 1 do
+								DrawLine(simulationPath[i], simulationPath[i + 1])
+							end
+						end
+
+						-- Draw perpendicular cross at final position
+						local groundPos = testFeet -- use actual simulated feet pos (handles uneven ground)
+						local dirLen = CurrentPeekBasisDir:Length()
+						local basis = (dirLen > 0) and (CurrentPeekBasisDir / dirLen) or Vector3(1, 0, 0)
+						local perp = Vector3(-basis.y, basis.x, 0)
+						local crossStart = groundPos + (perp * 5)
+						local crossEnd = groundPos - (perp * 5)
+						tableInsert(CrossDrawList, { start = crossStart, endPos = crossEnd, sees = sees })
+					end
+
+					-- Predeclare variables to avoid scope issues with goto
+					local farPos, farVisible, farFeet, farEye, farPath
+					local low, high, bestPos, bestFeet
+					local found = false
+					local walkableDistance, cachedPath
+					local best_ticks
+					local simStartPos, simDirection, simMaxTicks
+
+					local startEye = PeekStartFeet + viewOffset
+					local startVisible = CanAttackFromPos(pLocal, startEye, false) -- Not binary search mode
+					if startVisible then
+						CurrentBestPos = startEye
+						addVisual(PeekStartFeet, true, { PeekStartFeet })
+						found = true
+						bestFeet = PeekStartFeet
+						bestPos = startEye
+						goto after_search
+					end
+
+					-- Get cached simulation result (only computed once per frame)
+					if PredictionFrozen and FrozenSimulationResult then
+						-- Use frozen prediction
+						walkableDistance = FrozenSimulationResult.walkableDistance
+						farFeet = FrozenSimulationResult.endPos
+						cachedPath = FrozenSimulationResult.path
+						simStartPos = FrozenStartPos
+						simDirection = FrozenDirection
+						simMaxTicks = FrozenMaxTicks
+					else
+						-- Use current prediction
+						walkableDistance, farFeet, cachedPath =
+							GetCachedSimulation(PeekStartFeet, PeekDirectionVec, Menu.PeekTicks)
+						simStartPos = PeekStartFeet
+						simDirection = PeekDirectionVec
+						simMaxTicks = Menu.PeekTicks
+					end
+
+					if walkableDistance > 0 then
+						CurrentPeekBasisDir = farFeet - simStartPos
+						CurrentPeekBasisDir.z = 0
+						-- fallback if zero
+						if CurrentPeekBasisDir:Length() == 0 then
+							CurrentPeekBasisDir = OriginalPeekDirection
+						end
+						CurrentPeekBasisDir = CurrentPeekBasisDir / CurrentPeekBasisDir:Length()
+
+						farEye = farFeet + viewOffset
+						farVisible = CanAttackFromPos(pLocal, farEye, false) -- Not binary search mode
+						addVisual(farFeet, farVisible, cachedPath)
+						if not farVisible then
+							IsReturning = true
+							CurrentBestPos = nil
+							goto after_search
+						end
+					else
+						IsReturning = true
+						CurrentBestPos = nil
+						goto after_search
+					end
+
+					low = 0.0 -- invisible (fractional tick count)
+					high = simMaxTicks * 1.0 -- visible (fractional tick count)
+					found = true
+
+					-- Binary search using cached simulation path with linear interpolation
+					for i = 1, Menu.Iterations do
+						local mid_ticks = (low + high) * 0.5 -- fractional ticks
+
+						-- Early bailout if we've reached floating point precision limits
+						-- If the difference is smaller than what we can meaningfully distinguish,
+						-- continuing iterations won't improve accuracy
+						local precision_threshold = 0.0001 -- about 1/100th of a tick
+						if (high - low) < precision_threshold then
+							-- We've reached the limits of meaningful precision, bail out
+							break
+						end
+
+						-- Use linear interpolation on cached path
+						local testFeet = InterpolatePosition(cachedPath, mid_ticks)
+						if not testFeet then
+							-- Fallback if interpolation fails
+							low = mid_ticks
+							goto continue_search
+						end
+
+						local testEye = testFeet + viewOffset
+						local vis = CanAttackFromPos(pLocal, testEye, true) -- Binary search mode - only check top candidate
+						addVisual(testFeet, vis, cachedPath)
+
+						if vis then
+							high = mid_ticks
+						else
+							low = mid_ticks
+						end
+
+						::continue_search::
+					end
+
+					-- After loop, compute best at converged high
+					best_ticks = high
+					bestFeet = InterpolatePosition(cachedPath, best_ticks)
+					if bestFeet then
+						bestPos = bestFeet + viewOffset
+					end
+
+					::after_search::
+
+					if bestFeet and found then
+						WalkTo(pCmd, pLocal, bestFeet)
+						CurrentBestPos = bestPos -- eye for other uses if needed
+						CurrentBestFeet = bestFeet -- add this for drawing
+					else
+						IsReturning = true
+						CurrentBestPos = nil
+						CurrentBestFeet = nil
+					end
+				end -- End of CanShoot check
+			end
 		end
 
 		if IsReturning == true then
@@ -1405,7 +1519,16 @@ local function OnCreateMove(pCmd)
 				end
 
 				if warp and not warp.IsWarping() and (warp.GetChargedTicks() or 0) > 0 and canWarp then
+					if IsPlayerZoomed(pLocal) and IsAwaitingUnzoom == false then
+						if PendingUnzoomRelease == false then
+							clientCommand("+attack2", true)
+							PendingUnzoomRelease = true
+							IsAwaitingUnzoom = true
+						end
+						return
+					end
 					warp.TriggerWarp()
+					IsAwaitingUnzoom = false
 				end
 				if speed <= 5 then -- fallback if stuck
 					pLocal:SetAbsOrigin(PeekReturnVec)
@@ -1493,7 +1616,12 @@ local function OnCreateMove(pCmd)
 	if not (pLocal:IsAlive() and isButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13))) then
 		PosPlaced = false
 		IsReturning = false
+		IsWaitingForRecharge = false
 		HasDirection = false
+		HasShotSincePeekStart = false
+		AwaitingShotConfirmation = false
+		ShotConfirmedForReturn = false
+		PrevShotAmmoSnapshot = nil
 		PeekSide = 0
 		PeekReturnVec = Vector3(0, 0, 0)
 		PeekStartFeet = nil
@@ -1505,6 +1633,10 @@ local function OnCreateMove(pCmd)
 		LineDrawList = {}
 		CrossDrawList = {}
 		ShotThisTick = false
+		PendingUnzoomRelease = false
+		IsAwaitingUnzoom = false
+		PendingZoomInRelease = false
+		IsAwaitingZoomIn = false
 		NeedsCyoaClose = false
 
 		-- Reset prediction freezing
@@ -1521,10 +1653,6 @@ local function OnCreateMove(pCmd)
 		-- Clear visibility cache to prevent stale data
 		VisibilityCache = {}
 		VisibilityCacheUpdateTick = -1
-
-		if Menu.WarpBack and warp then
-			warp.TriggerCharge()
-		end --remember this is hwo you recharge api is literaly this dont cahnge it
 	end
 end
 

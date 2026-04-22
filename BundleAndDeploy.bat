@@ -1,9 +1,10 @@
 @echo off
 
-echo Copying Lua scripts to %LOCALAPPDATA%...
+set "TARGET=%LOCALAPPDATA%\lua"
+if not exist "%TARGET%" mkdir "%TARGET%"
+echo Copying Lua scripts to %TARGET%...
 
-copy /Y "%~dp0*.lua" "%LOCALAPPDATA%\"
+copy /Y "%~dp0*.lua" "%TARGET%\" >nul
 
 echo All Lua scripts copied successfully!
-pause
-exit
+exit /b 0
