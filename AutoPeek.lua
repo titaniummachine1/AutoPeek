@@ -4,6 +4,8 @@
     Origin Author: LNX (github.com/lnx00)
 ]]
 
+warp.triggercharge()
+
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 
@@ -1546,9 +1548,14 @@ local function OnCreateMove(pCmd)
 								gui.SetValue("fake lag value (ms)", 230)
 								FakeLagPeekActive = true
 							end
-							if not ZoomInTriggered and not IsPlayerZoomed(pLocal) then
-								clientCommand("+attack2", true)
-								ZoomInTriggered = true
+							if not ZoomInTriggered then
+								if not IsPlayerZoomed(pLocal) then
+									clientCommand("+attack2", true)
+									ZoomInTriggered = true -- next tick we release
+								end
+							elseif ZoomInTriggered and not IsPlayerZoomed(pLocal) then
+								-- Release the button the tick after we pressed it
+								clientCommand("-attack2", true)
 							end
 						end
 					end
