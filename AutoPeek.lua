@@ -1421,6 +1421,9 @@ local function OnCreateMove(pCmd)
 				local walkableDistance, cachedPath
 				local best_ticks
 				local simStartPos, simDirection, simMaxTicks
+				-- Walk this many ticks past the first-visible edge so we are
+				-- solidly inside visible territory, not teetering at the boundary.
+				local VISIBILITY_MARGIN_TICKS = 1.5
 
 				local startEye = PeekStartFeet + viewOffset
 				local startVisible = CanAttackFromPos(pLocal, startEye)
@@ -1512,12 +1515,9 @@ local function OnCreateMove(pCmd)
 					::continue_search::
 				end
 
-				-- After loop, compute best position.
-				-- 'high' converged to the first-visible edge.  Walk a small margin
-				-- PAST that edge so we are solidly in visible territory and not
-				-- teetering right at the boundary where float jitter / movement
-				-- imprecision can tip us back into cover.
-				local VISIBILITY_MARGIN_TICKS = 1.5
+				-- 'high' converged to the first-visible edge. Apply forward margin
+				-- so the walk target is solidly inside visible territory and not
+				-- teetering at the boundary where jitter tips us back into cover.
 				best_ticks = math.min(high + VISIBILITY_MARGIN_TICKS, simMaxTicks * 1.0)
 				bestFeet = InterpolatePosition(cachedPath, best_ticks)
 				if bestFeet then
