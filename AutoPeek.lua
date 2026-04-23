@@ -7,6 +7,8 @@
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 
+local Movement = require("autopeek.Movement")
+
 -- Additional libs
 local okLib, lnxLib = pcall(require, "lnxlib")
 if okLib then
@@ -1244,31 +1246,8 @@ local function CanAttackFromPos(pLocal, pPos, binaryIteration)
 	return false
 end
 
-local function ComputeMove(pCmd, a, b)
-	local diff = (b - a)
-	if diff:Length() == 0 then
-		return Vector3(0, 0, 0)
-	end
-
-	-- Compute angles from a to b using native math
-	local d = b - a
-	local len2d = mathSqrt(d.x * d.x + d.y * d.y)
-	local targetPitch = -mathDeg(math.atan(d.z, len2d))
-	local targetYaw = mathDeg(math.atan(d.y, d.x))
-	local cPitch, cYaw, cRoll = pCmd:GetViewAngles()
-	local yaw = mathRad(targetYaw - cYaw)
-	local pitch = mathRad(targetPitch - cPitch)
-	local move = Vector3(mathCos(yaw) * 450, -mathSin(yaw) * 450, -mathCos(pitch) * 450)
-	return move
-end
-
--- Walks to a given destination vector
 local function WalkTo(pCmd, pLocal, pDestination)
-	local localPos = pLocal:GetAbsOrigin()
-	local result = ComputeMove(pCmd, localPos, pDestination)
-
-	pCmd:SetForwardMove(result.x)
-	pCmd:SetSideMove(result.y)
+	Movement.WalkTo(pCmd, pLocal, pDestination)
 end
 
 local function DrawLine(startPos, endPos)
