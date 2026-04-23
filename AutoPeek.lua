@@ -4,8 +4,6 @@
     Origin Author: LNX (github.com/lnx00)
 ]]
 
-warp.triggercharge()
-
 local menuLoaded, TimMenu = pcall(require, "TimMenu")
 assert(menuLoaded, "TimMenu not found, please install it!")
 

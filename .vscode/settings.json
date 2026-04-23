@@ -1,9 +1,15 @@
 {
+    "Lua.runtime.version": "Lua 5.4",
+    "Lua.workspace.library": [
+        "C:/gitProjects/Lmaobox-Annotations/library"
+    ],
+    "Lua.workspace.checkThirdParty": true,
+    "files.autoSave": "onFocusChange",
     "editor.formatOnSave": true,
     "[lua]": {
-      "editor.defaultFormatter": "JohnnyMorganz.stylua", 
-      // Or if using LuaFormat: "editor.defaultFormatter": "koihik.vscode-lua-format",
-      "editor.formatOnSave": true
+        "editor.defaultFormatter": "JohnnyMorganz.stylua",
+        // Or if using LuaFormat: "editor.defaultFormatter": "koihik.vscode-lua-format",
+        "editor.formatOnSave": true
     },
     "stylua.searchParentDirectories": true,
     "emeraldwalk.runonsave": {
