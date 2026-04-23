@@ -78,6 +78,7 @@ local Menu = {
 	Iterations = 7, -- Binary-search refinement passes
 	WarpBack = true, -- Warp back instantly instead of walking
 	InstantStop = false, -- Enable instant stop on shooting
+	FakeLagPeek = false, -- Enable fake lag + auto zoom-in when approaching peek spot
 
 	TargetLimit = 3, -- Max players considered per tick (optimized for multi-sniper scenarios)
 
@@ -224,6 +225,9 @@ local function SafeInitMenu()
 	if Menu.InstantStop == nil then
 		Menu.InstantStop = true
 	end
+	if Menu.FakeLagPeek == nil then
+		Menu.FakeLagPeek = false
+	end
 	if Menu.TargetLimit == nil then
 		Menu.TargetLimit = 8
 	end
@@ -260,6 +264,8 @@ local PendingUnzoomRelease = false -- Do we need to release attack2 after forcin
 local IsAwaitingUnzoom = false -- Have we requested unzoom and are waiting one tick for command registration?
 local PendingZoomInRelease = false -- Do we need to release attack2 after forcing zoom-in?
 local IsAwaitingZoomIn = false -- Have we requested zoom-in and are waiting for scope state?
+local FakeLagPeekActive = false -- Is fake lag currently controlled by AutoPeek?
+local ZoomInTriggered = false -- Have we already triggered zoom-in for this peek approach?
 local HasShotSincePeekStart = false -- Have we fired at least once during the current peek cycle?
 local AwaitingShotConfirmation = false -- Are we waiting for ammo decrease to confirm a fired shot?
 local ShotConfirmedForReturn = false -- Was a shot confirmed for this return cycle?
@@ -1525,6 +1531,22 @@ local function OnCreateMove(pCmd)
 					WalkTo(pCmd, pLocal, bestFeet)
 					CurrentBestPos = bestPos -- eye for other uses if needed
 					CurrentBestFeet = bestFeet -- add this for drawing
+
+					-- Zoom-in + fake lag: trigger both simultaneously ~200ms before reaching peek spot
+					if Menu.FakeLagPeek then
+						local distToBest = (bestFeet - localPos):Length()
+						if distToBest < 200 then
+							if not FakeLagPeekActive then
+								gui.SetValue("fake lag", 1)
+								gui.SetValue("fake lag value (ms)", 230)
+								FakeLagPeekActive = true
+							end
+							if not ZoomInTriggered and not IsPlayerZoomed(pLocal) then
+								clientCommand("+attack2", true)
+								ZoomInTriggered = true
+							end
+						end
+					end
 				else
 					IsReturning = true
 					CurrentBestPos = nil
@@ -1534,6 +1556,11 @@ local function OnCreateMove(pCmd)
 		end
 
 		if IsReturning == true then
+			-- Disable fake lag as soon as we start returning
+			if FakeLagPeekActive then
+				gui.SetValue("fake lag", 0)
+				FakeLagPeekActive = false
+			end
 			local distVector = PeekReturnVec - localPos
 			local dist = distVector:Length()
 			if dist < 7 then
@@ -1614,6 +1641,11 @@ local function OnCreateMove(pCmd)
 				IsReturning = true
 			end
 			if IsReturning == true then
+				-- Disable fake lag as soon as we start returning (manual mode)
+				if FakeLagPeekActive then
+					gui.SetValue("fake lag", 0)
+					FakeLagPeekActive = false
+				end
 				local distVector = PeekReturnVec - localPos
 				local dist = distVector:Length()
 				if dist < 7 then
@@ -1698,6 +1730,11 @@ local function OnCreateMove(pCmd)
 		PendingZoomInRelease = false
 		IsAwaitingZoomIn = false
 		NeedsCyoaClose = false
+		if FakeLagPeekActive then
+			gui.SetValue("fake lag", 0)
+			FakeLagPeekActive = false
+		end
+		ZoomInTriggered = false
 
 		-- Reset prediction freezing
 		PredictionFrozen = false
@@ -1738,6 +1775,10 @@ local function OnDraw()
 
 			Menu.InstantStop = TimMenu.Checkbox("Instant Stop", Menu.InstantStop)
 			TimMenu.Tooltip("Use instant stop when shooting (cyoa command)")
+			TimMenu.NextLine()
+
+			Menu.FakeLagPeek = TimMenu.Checkbox("Fake Lag Peek", Menu.FakeLagPeek)
+			TimMenu.Tooltip("Enables fake lag (230ms) + auto zoom-in ~200 units before reaching peek spot")
 			TimMenu.NextLine()
 
 			Menu.PeekTicks = TimMenu.Slider("Peek Ticks", Menu.PeekTicks, 10, 132, 1)
