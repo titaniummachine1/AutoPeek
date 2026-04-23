@@ -1561,15 +1561,14 @@ local function OnCreateMove(pCmd)
 								gui.SetValue("fake lag value (ms)", 230)
 								FakeLagPeekActive = true
 							end
-							if not ZoomInTriggered then
-								if not IsPlayerZoomed(pLocal) then
-									clientCommand("+attack2", true)
-									ZoomInTriggered = true -- next tick we release
-								end
-							elseif ZoomInTriggered and not IsPlayerZoomed(pLocal) then
-								-- Release the button the tick after we pressed it
+							if not ZoomInTriggered and not IsPlayerZoomed(pLocal) then
+								-- Tap +attack2/-attack2 in the same tick so TF2 sees a single
+								-- button-press edge without us re-toggling the scope on subsequent ticks.
+								clientCommand("+attack2", true)
 								clientCommand("-attack2", true)
+								ZoomInTriggered = true
 							end
+							-- Nothing to do while animating or already zoomed – just wait.
 						end
 					end
 				else
