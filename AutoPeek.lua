@@ -1532,10 +1532,15 @@ local function OnCreateMove(pCmd)
 					CurrentBestPos = bestPos -- eye for other uses if needed
 					CurrentBestFeet = bestFeet -- add this for drawing
 
-					-- Zoom-in + fake lag: trigger both simultaneously ~200ms before reaching peek spot
+					-- Zoom-in + fake lag: trigger both simultaneously when we are ~20 ticks away
+					-- from the peek spot. 15 ticks measured from toggle->shot-ready (log data),
+					-- +5 ticks conservative buffer = 20 ticks. At 300 u/s that is ~90 units.
 					if Menu.FakeLagPeek then
 						local distToBest = (bestFeet - localPos):Length()
-						if distToBest < 200 then
+						local unitsPerTick = MAX_SPEED * TICK_INTERVAL
+						local ZOOM_TRIGGER_TICKS = 20 -- 15 ticks zoom time + 5 buffer
+						local triggerDist = ZOOM_TRIGGER_TICKS * unitsPerTick
+						if distToBest < triggerDist then
 							if not FakeLagPeekActive then
 								gui.SetValue("fake lag", 1)
 								gui.SetValue("fake lag value (ms)", 230)
