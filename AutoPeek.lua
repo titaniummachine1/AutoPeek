@@ -1512,8 +1512,13 @@ local function OnCreateMove(pCmd)
 					::continue_search::
 				end
 
-				-- After loop, compute best at converged high
-				best_ticks = high
+				-- After loop, compute best position.
+				-- 'high' converged to the first-visible edge.  Walk a small margin
+				-- PAST that edge so we are solidly in visible territory and not
+				-- teetering right at the boundary where float jitter / movement
+				-- imprecision can tip us back into cover.
+				local VISIBILITY_MARGIN_TICKS = 1.5
+				best_ticks = math.min(high + VISIBILITY_MARGIN_TICKS, simMaxTicks * 1.0)
 				bestFeet = InterpolatePosition(cachedPath, best_ticks)
 				if bestFeet then
 					bestPos = bestFeet + viewOffset
