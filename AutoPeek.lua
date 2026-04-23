@@ -1313,7 +1313,7 @@ local function OnCreateMove(pCmd)
 		PrevCanShoot = currentCanShoot
 	end
 
-	if pLocal:IsAlive() and isButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13)) then
+	if pLocal:IsAlive() and (isButtonDown(Menu.Key) or (PosPlaced and pLocal:InCond(13))) then
 		local localPos = pLocal:GetAbsOrigin()
 		local didPressAttack = (pCmd:GetButtons() & IN_ATTACK) ~= 0
 
@@ -1730,7 +1730,7 @@ local function OnCreateMove(pCmd)
 	end
 
 	-- Key not pressed - reset all variables
-	if not (pLocal:IsAlive() and isButtonDown(Menu.Key) or pLocal:IsAlive() and (pLocal:InCond(13))) then
+	if not (pLocal:IsAlive() and (isButtonDown(Menu.Key) or (PosPlaced and pLocal:InCond(13)))) then
 		PosPlaced = false
 		IsReturning = false
 		IsWaitingForRecharge = false
