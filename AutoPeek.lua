@@ -271,6 +271,7 @@ local AwaitingShotConfirmation = false -- Are we waiting for ammo decrease to co
 local ShotConfirmedForReturn = false -- Was a shot confirmed for this return cycle?
 local PrevShotAmmoSnapshot = nil -- Previous tick ammo snapshot for shot confirmation
 local HasDirection = false -- Do we have a peek direction?
+local viewOffset = Vector3(0, 0, 64) -- Cached view offset, set when peek starts
 local PeekStartVec = Vector3(0, 0, 0)
 local PeekDirectionVec = Vector3(0, 0, 0)
 local PeekReturnVec = Vector3(0, 0, 0)
@@ -933,14 +934,21 @@ local function HasShotAmmoDecreased(previousSnapshot, currentSnapshot)
 	return false
 end
 
--- FOV calculation using lnxLib Math functions
+-- FOV calculation (native Lua, no lnxLib dependency)
 local function GetFOV(fromPos, toPos, viewAngles)
-	-- Use lnxLib Math functions properly:
-	-- 1. Get the angle from player position to target position
-	local targetAngles = Math.PositionAngles(fromPos, toPos)
-	-- 2. Calculate FOV between current view angles and target angles
-	local result = Math.AngleFov(viewAngles, targetAngles)
-	return result
+	local delta = toPos - fromPos
+	local len2d = mathSqrt(delta.x * delta.x + delta.y * delta.y)
+	local targetPitch = -mathDeg(math.atan(delta.z, len2d))
+	local targetYaw = mathDeg(math.atan(delta.y, delta.x))
+	local dPitch = targetPitch - viewAngles.x
+	local dYaw = targetYaw - viewAngles.y
+	-- Normalize yaw delta to [-180, 180]
+	if dYaw > 180 then
+		dYaw = dYaw - 360
+	elseif dYaw < -180 then
+		dYaw = dYaw + 360
+	end
+	return mathSqrt(dPitch * dPitch + dYaw * dYaw)
 end
 
 -- Function to calculate view position for target players (same as local player calculation)
@@ -1242,11 +1250,14 @@ local function ComputeMove(pCmd, a, b)
 		return Vector3(0, 0, 0)
 	end
 
-	-- Use lnxLib Math functions for better accuracy
-	local targetAngles = Math.PositionAngles(a, b)
-	local cPitch, cYaw, cRoll = pCmd:GetViewAngles() -- GetViewAngles returns 3 separate numbers, not an object
-	local yaw = mathRad(targetAngles.y - cYaw)
-	local pitch = mathRad(targetAngles.x - cPitch)
+	-- Compute angles from a to b using native math
+	local d = b - a
+	local len2d = mathSqrt(d.x * d.x + d.y * d.y)
+	local targetPitch = -mathDeg(math.atan(d.z, len2d))
+	local targetYaw = mathDeg(math.atan(d.y, d.x))
+	local cPitch, cYaw, cRoll = pCmd:GetViewAngles()
+	local yaw = mathRad(targetYaw - cYaw)
+	local pitch = mathRad(targetPitch - cPitch)
 	local move = Vector3(mathCos(yaw) * 450, -mathSin(yaw) * 450, -mathCos(pitch) * 450)
 	return move
 end
@@ -1651,6 +1662,7 @@ local function OnCreateMove(pCmd)
 				IsReturning = true
 			end
 			if IsReturning == true then
+				local localPos = pLocal:GetAbsOrigin()
 				-- Disable fake lag as soon as we start returning (manual mode)
 				if FakeLagPeekActive then
 					gui.SetValue("fake lag", 0)
@@ -1693,7 +1705,7 @@ local function OnCreateMove(pCmd)
 					local speed = velocity:Length2D()
 
 					-- Check if velocity is pointing towards return position
-					local toReturn = PeekReturnVec - localPos
+					local toReturn = PeekReturnVec - pLocal:GetAbsOrigin()
 					toReturn.z = 0 -- ignore vertical
 					local velocityDir = Vector3(velocity.x, velocity.y, 0)
 
@@ -2042,7 +2054,9 @@ local function OnDraw()
 				sum = sum + cross(pos, nextPos, positions[1])
 			end
 			local polyPts = (sum < 0) and ptsReversed or pts
-			texturedPolygon(StartCircleTexture, polyPts, true)
+			if StartCircleTexture then
+				texturedPolygon(StartCircleTexture, polyPts, true)
+			end
 
 			-- Draw final outline
 			setColor(
