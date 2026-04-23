@@ -1296,8 +1296,10 @@ local function OnCreateMove(pCmd)
 	local currentCanShoot = CanShoot(pLocal)
 	if currentCanShoot ~= PrevCanShoot then
 		if currentCanShoot == false and PrevCanShoot == true then
-			-- Weapon just fired, check if we were peeking and should return
-			if PosPlaced and IsReturning == false then
+			-- Weapon just fired, check if we were peeking and should return.
+			-- Skip if ZoomInTriggered: we deliberately sent +attack2 which temporarily
+			-- pushes nextPrimaryAttack forward and looks identical to a real shot.
+			if PosPlaced and IsReturning == false and not ZoomInTriggered then
 				IsReturning = true
 				CurrentBestPos = nil -- Clear best position if returning
 				CurrentBestFeet = nil
@@ -1403,8 +1405,10 @@ local function OnCreateMove(pCmd)
 			-- Update target candidates once per tick (expensive operation)
 			UpdateTargetCandidates(pLocal, PeekStartFeet + viewOffset)
 
-			-- Check if we can shoot - if not, start returning
-			if not CanShoot(pLocal) then
+			-- Check if we can shoot - if not, start returning.
+			-- Exempt ZoomInTriggered: scope animation blocks CanShoot temporarily;
+			-- returning here would cause the zoom/unzoom thrash loop.
+			if not CanShoot(pLocal) and not ZoomInTriggered then
 				IsReturning = true
 				CurrentBestPos = nil
 				CurrentBestFeet = nil

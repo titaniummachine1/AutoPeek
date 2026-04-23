@@ -19,7 +19,7 @@
                 "isAsync": true,
                 "cmd": "\"${workspaceFolder}\\BundleAndDeploy.bat\"",
                 "message": "Deploying ${fileBasename} to LocalAppData...",
-                "autoShowOutputPanel": true
+                "autoShowOutputPanel": "error"
             }
         ]
     }
